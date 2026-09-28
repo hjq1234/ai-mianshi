@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -19,6 +21,20 @@ public class GlobalExceptionHandler {
         // 其余业务错误用 HTTP 200 + code，前端按 code 提示即可
         HttpStatus status = e.getCode() == 401 ? HttpStatus.UNAUTHORIZED : HttpStatus.OK;
         return ResponseEntity.status(status).body(ApiResponse.fail(e.getCode(), e.getMessage()));
+    }
+
+    /**
+     * 找不到静态文件 / 找不到处理器，都是 404，不是「服务器炸了」。
+     *
+     * 必须有这条，否则会掉进下面的兜底分支：按 ERROR 打一整条堆栈、回 500。
+     * 而浏览器每次打开页面都会自动请求 /favicon.ico，也就是每次刷页面都往日志里
+     * 灌一条 ERROR 堆栈——真出问题时反而找不到有用的日志。
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ApiResponse<Void>> handleNotFound(Exception e) {
+        log.debug("找不到资源: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail(404, "资源不存在"));
     }
 
     @ExceptionHandler(Exception.class)

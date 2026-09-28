@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div class="login-wrap" id="app">
+  <form class="login-card" @submit.prevent="submit">
+    <h1>AI 模拟面试</h1>
+    <p class="sub">登录后开始一场模拟面试</p>
+
+    <div class="field">
+      <label>用户名</label>
+      <input v-model.trim="username" autocomplete="username" placeholder="请输入用户名">
+    </div>
+
+    <div class="field">
+      <label>密码</label>
+      <input v-model="password" type="password" autocomplete="current-password"
+             placeholder="请输入密码">
+    </div>
+
+    <button type="submit" :disabled="loading || !username || !password">
+      <span v-if="loading" class="spinner"></span>
+      {{ loading ? '登录中…' : '登 录' }}
+    </button>
+
+    <p class="hint">首次使用默认账号 admin / admin123</p>
+  </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return { username: 'admin', password: '', loading: false };
+    },
+    mounted() {
+      // 已经登录过就直接进首页，不用再登一次
+      if (getToken()) {
+        location.replace('index.html');
+      }
+    },
+    methods: {
+      async submit() {
+        this.loading = true;
+        try {
+          const data = await api('/api/auth/login', {
+            method: 'POST',
+            body: { username: this.username, password: this.password }
+          });
+          setToken(data.token);
+          // 用 replace 而不是 href，避免用户点后退又回到登录页
+          location.replace('index.html');
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.loading = false;
+        }
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>
