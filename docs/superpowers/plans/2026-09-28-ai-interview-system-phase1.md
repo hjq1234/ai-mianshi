@@ -4441,10 +4441,67 @@ git commit -m "feat(interview): start / question / wait_answer 三个节点"
 ## Task 18: 评分 —— 解析器与 evaluate 节点
 
 **Files:**
+- Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewRouting.java` ← 原计划放在 Task 20，见下方说明
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/EvalResultParser.java`
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/node/EvaluateNode.java`
 
-- [ ] **Step 1: 写 `EvalResultParser.java`**
+> **★ 任务拆分修正（执行时发现）**：`EvaluateNode` 要 import `InterviewRouting`，
+> 但原计划把它排在 Task 20——这样 Task 18 单独编译必然失败，Task 18 的提交点就是破的。
+> 故把 `InterviewRouting.java` 提前到本任务创建，Task 20 的 Step 1 相应删掉。
+> 教训：**每个 Task 的提交点都必须能独立编译**，排任务时要顺着依赖倒推一遍。
+
+- [ ] **Step 1: 写 `InterviewRouting.java`**
+
+```java
+package com.ke.nhservice.aimianshi.biz.interview.flow;
+
+import com.ke.nhservice.aimianshi.biz.interview.EvalResult;
+import com.ke.nhservice.aimianshi.biz.interview.InterviewState;
+
+/**
+ * ★ 全图唯一的决策点，纯函数（不碰数据库、不调 LLM）。
+ *
+ * 抽成独立静态函数而不是写在 EvaluateBranch 里，是因为 EvaluateNode 落库
+ * next_action 时要用同一套判断。两处各写一份，迟早会出现「数据库记录的分支
+ * 和实际走的分支不一致」。
+ *
+ * 题数检查放在这里（evaluate 之后）而不是 question 之前：
+ * 此时 questionIndex 恰好是刚答完那题的编号，而 deepen 等分支节点只负责 +1、
+ * 不设 shouldStop，所以回到 question 时无需再判断——不存在 off-by-one。
+ */
+public final class InterviewRouting {
+
+    public static final String END = "end_loop";
+    public static final String DEEPEN = "deepen";
+    public static final String CONTINUE = "continue";
+    public static final String LOWER = "lower";
+    public static final String SWITCH = "switch";
+
+    private InterviewRouting() {
+    }
+
+    public static String decide(InterviewState state) {
+        if (state.isShouldStop()) {
+            return END;
+        }
+        if (state.getQuestionIndex() >= state.getMaxQuestions()) {
+            return END;
+        }
+        EvalResult result = state.getEvalResult();
+        if (result == null || result.getNextAction() == null) {
+            return CONTINUE;
+        }
+        return switch (result.getNextAction()) {
+            case DEEPEN -> DEEPEN;
+            case LOWER -> LOWER;
+            case SWITCH -> SWITCH;
+            case CONTINUE -> CONTINUE;
+        };
+    }
+}
+```
+
+- [ ] **Step 2: 写 `EvalResultParser.java`**
 
 ```java
 package com.ke.nhservice.aimianshi.biz.interview;
@@ -4524,7 +4581,7 @@ public final class EvalResultParser {
 }
 ```
 
-- [ ] **Step 2: 写 `EvaluateNode.java`**
+- [ ] **Step 3: 写 `EvaluateNode.java`**
 
 ```java
 package com.ke.nhservice.aimianshi.biz.interview.node;
@@ -4654,11 +4711,59 @@ public class EvaluateNode implements Node<InterviewState> {
 }
 ```
 
-- [ ] **Step 3: 编译并提交**
+- [ ] **Step 4: 编译、验证解析器容错、提交**
+
+先编译：
 
 ```bash
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
 ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
-git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/
+```
+
+★ 解析器是**全系统唯一直面 LLM 脏输出的地方**，光编译过不算数，必须真跑一遍。
+写个单文件程序（放临时目录，**不要放进仓库**），覆盖这些 case：
+
+| 输入 | 期望 |
+|---|---|
+| 干净 JSON | 各字段正确、五个维度顺序固定 |
+| ` ```json ` 围栏 + 前后夹解释文字 | 剥掉围栏和前导语，仍能解析 |
+| `overall` 给 99 / -5 | clamp 到 10 / 0 |
+| 维度值给 50 / -3 | clamp 到 10 / 0 |
+| 只给 `overall`，不给 dimensions | 五个维度全在，缺的补 0 |
+| 只给 `overall`，不给 comment / coveredTopics | 空串 / 空列表，**不是 null** |
+| 给第六个未知维度、顶层多余字段 | 丢掉，不报错 |
+| `nextAction` 拼错 + 9 分 | 按分数兜底 → DEEPEN |
+| `nextAction` 拼错 + 3 分 | → LOWER |
+| `nextAction` 小写 `deepen` | 认，听显式的而不是按分数推 |
+| 显式 `SWITCH` + 9.5 分 | 听显式的，不被高分覆盖 |
+| 空串 / 无花括号 / 单个 `{` / `{` 后无值 | **抛异常**（由 EvaluateNode 兜成 degraded） |
+
+同时把 `InterviewRouting.decide()` 的决策表一起断言：
+
+| 状态 | 期望 |
+|---|---|
+| `shouldStop=true` | `end_loop` |
+| `questionIndex >= maxQuestions` | `end_loop` |
+| 同上，且 nextAction=DEEPEN | 仍是 `end_loop`（最后一题答完必须收尾，不能被追问拖住） |
+| `evalResult=null` | `continue` |
+| DEEPEN / LOWER / SWITCH / CONTINUE | 各自同名 |
+
+运行方式（`-cp` 分隔符用分号，因为 java.exe 是 Windows 程序）：
+
+```bash
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -Dfile.encoding=UTF-8 \
+  -cp "target/classes;$(cat /tmp/cp.txt)" "C:/Users/.../Temp/EvalParseCheck.java"
+```
+
+预期：`RESULT: pass=33 fail=0`（实测 33/33）。
+
+★ 别用 `.jsh` 验证：jshell 文件模式把每行当独立片段解析，多行表达式会被拆散报语法错，
+再叠加 `grep -v "^|"` 过滤，连报错行都会被吞掉，**会假通过**。
+
+```bash
+git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewRouting.java \
+        src/main/java/com/ke/nhservice/aimianshi/biz/interview/EvalResultParser.java \
+        src/main/java/com/ke/nhservice/aimianshi/biz/interview/node/EvaluateNode.java
 git commit -m "feat(interview): 评分解析器（容错）与 evaluate 节点"
 ```
 
@@ -4830,62 +4935,13 @@ git commit -m "feat(interview): 分支节点合并为 SetHintNode、end 收尾�
 ## Task 20: 流程图定义
 
 **Files:**
-- Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewRouting.java`
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/EvaluateBranch.java`
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewGraphFactory.java`
 
-- [ ] **Step 1: 写 `InterviewRouting.java`**
+> **注**：`InterviewRouting.java` 已经提前到 **Task 18** 创建了（`EvaluateNode` 依赖它，
+> 排在这里 Task 18 就编译不过）。本任务直接用，不再重复创建。
 
-```java
-package com.ke.nhservice.aimianshi.biz.interview.flow;
-
-import com.ke.nhservice.aimianshi.biz.interview.EvalResult;
-import com.ke.nhservice.aimianshi.biz.interview.InterviewState;
-
-/**
- * ★ 全图唯一的决策点，纯函数（不碰数据库、不调 LLM）。
- *
- * 抽成独立静态函数而不是写在 EvaluateBranch 里，是因为 EvaluateNode 落库
- * next_action 时要用同一套判断。两处各写一份，迟早会出现「数据库记录的分支
- * 和实际走的分支不一致」。
- *
- * 题数检查放在这里（evaluate 之后）而不是 question 之前：
- * 此时 questionIndex 恰好是刚答完那题的编号，而 deepen 等分支节点只负责 +1、
- * 不设 shouldStop，所以回到 question 时无需再判断——不存在 off-by-one。
- */
-public final class InterviewRouting {
-
-    public static final String END = "end_loop";
-    public static final String DEEPEN = "deepen";
-    public static final String CONTINUE = "continue";
-    public static final String LOWER = "lower";
-    public static final String SWITCH = "switch";
-
-    private InterviewRouting() {
-    }
-
-    public static String decide(InterviewState state) {
-        if (state.isShouldStop()) {
-            return END;
-        }
-        if (state.getQuestionIndex() >= state.getMaxQuestions()) {
-            return END;
-        }
-        EvalResult result = state.getEvalResult();
-        if (result == null || result.getNextAction() == null) {
-            return CONTINUE;
-        }
-        return switch (result.getNextAction()) {
-            case DEEPEN -> DEEPEN;
-            case LOWER -> LOWER;
-            case SWITCH -> SWITCH;
-            case CONTINUE -> CONTINUE;
-        };
-    }
-}
-```
-
-- [ ] **Step 2: 写 `EvaluateBranch.java`**
+- [ ] **Step 1: 写 `EvaluateBranch.java`**
 
 ```java
 package com.ke.nhservice.aimianshi.biz.interview.flow;
@@ -4906,7 +4962,7 @@ public class EvaluateBranch implements BranchCondition<InterviewState> {
 }
 ```
 
-- [ ] **Step 3: 写 `InterviewGraphFactory.java`**
+- [ ] **Step 2: 写 `InterviewGraphFactory.java`**
 
 ```java
 package com.ke.nhservice.aimianshi.biz.interview.flow;
@@ -5020,11 +5076,13 @@ public class InterviewGraphFactory {
 }
 ```
 
-- [ ] **Step 4: 编译并提交**
+- [ ] **Step 3: 编译并提交**
 
 ```bash
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
 ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
-git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/
+git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/EvaluateBranch.java \
+        src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewGraphFactory.java
 git commit -m "feat(interview): 流程图定义（唯一决策点 + 四分支合并）"
 ```
 
