@@ -197,6 +197,11 @@ return RunResult.stepLimit(execution);
 |---|---|
 | 节点抛异常 | 引擎捕获 → `RunStatus.FAILED` → **状态已存库，不丢** |
 | 超 `maxSteps` | 返回 `RunStatus.STEP_LIMIT`，不抛异常；trace 表可见卡在哪个节点 |
+| 分支返回未声明的目标 | **直接抛 `GraphException`**，不转成 `FAILED` |
+
+最后一行是刻意的：分支条件返回了 `addBranch` 未声明的目标，属于**代码 bug**（条件和目标集不同步），
+`compile()` 没法提前校验（它无法预知条件会返回什么）。若转成 `FAILED`，接口层会告诉用户
+「进度已保存，可稍后继续」，但重试多少次都是同一个 bug，等于误导。快速失败更好排查。
 | 终止 | 不用 `NodeResult`，用 `state.shouldStop` + 分支路由到 end |
 
 ### 外部干预流程

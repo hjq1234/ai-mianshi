@@ -1045,9 +1045,17 @@ public class BranchSmokeTest {
         System.out.println("score=5:");
         System.out.println("  status=" + graph.run(new Execution<>(new State(5), null)).status());
 
-        System.out.println("score=1（故意路由到未声明的 missing）:");
-        RunResult<State> r = graph.run(new Execution<>(new State(1), null));
-        System.out.println("  status=" + r.status() + " error=" + r.error().getMessage());
+        System.out.println("score=1（分支路由到未声明的 missing）:");
+        // 注意：这里必须用 try/catch。resolveNext 在 try 块外面，
+        // 分支返回未声明目标时 GraphException 会直接抛出 run()，
+        // 不会变成 RunResult.failed(...)
+        try {
+            RunResult<State> r = graph.run(new Execution<>(new State(1), null));
+            System.out.println("  返回了 RunResult: status=" + r.status()
+                    + " error=" + (r.error() == null ? "null" : r.error().getMessage()));
+        } catch (GraphException ex) {
+            System.out.println("  抛出了 GraphException: " + ex.getMessage());
+        }
     }
 }
 ```
@@ -1059,7 +1067,7 @@ Run:
 ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
 java -cp target/classes com.ke.nhservice.aimianshi.graph.BranchSmokeTest
 ```
-Expected:
+Expected（已实测核对）：
 ```
 score=9:
   -> deepen
@@ -1069,9 +1077,23 @@ score=5:
   -> continue
   -> stop
   status=FINISHED
-score=1（故意路由到未声明的 missing）:
-  status=FAILED error=分支 eval 返回了未声明的目标: missing，已声明的目标为 [stop, continue, deepen]
+score=1（分支路由到未声明的 missing）:
+  抛出了 GraphException: 分支 eval 返回了未声明的目标: missing，已声明的目标为 [stop, deepen, continue]
 ```
+
+> **最后一条为什么是抛异常而不是 `RunStatus.FAILED`**
+>
+> 设计文档的错误处理表只规定了「节点抛异常 → FAILED」和「超 maxSteps → STEP_LIMIT」，
+> 没规定「分支返回未声明的目标」。这是实现定的，选择**快速失败**：
+>
+> `resolveNext()` 在 `run()` 的 try 块**外面**，所以 `GraphException` 直接往上抛。
+> 理由是这样属于**代码 bug**——分支条件和 `addBranch` 声明的目标集不同步，
+> `compile()` 校验不了（它无法预知条件会返回什么）。若返回 `FAILED`，
+> 接口层会告诉用户「进度已保存，可稍后继续」，但重试多少次都是同一个 bug，
+> 等于误导。抛出去变成 500 + 明确的错误信息，更好排查。
+>
+> 顺带：`[stop, deepen, continue]` 的顺序**不要断言**。`Set.copyOf` 的迭代顺序未指定，
+> 换个 JDK 版本可能就变了。要断言就只断言前缀 `分支 eval 返回了未声明的目标: missing`。
 
 - [ ] **Step 3: 删除临时类**
 
