@@ -137,7 +137,12 @@ public class Execution<S> {
 
 public enum RunStatus { FINISHED, SUSPENDED, FAILED, STEP_LIMIT }
 
-public record RunResult<S>(RunStatus status, String stoppedAt, S state) {}
+public record RunResult<S>(RunStatus status, String stoppedAt, S state, Throwable error) {
+    public static <S> RunResult<S> finished(String at, S state) { ... }
+    public static <S> RunResult<S> suspended(String at, S state) { ... }
+    public static <S> RunResult<S> failed(String at, S state, Throwable e) { ... }
+    public static <S> RunResult<S> stepLimit(String at, S state) { ... }
+}
 ```
 
 ### ★ 挂起机制（事件驱动的核心）
@@ -260,23 +265,32 @@ evaluate ───────── 调 LLM 评分 → EvalResult（含 nextAct
 ### 分支条件（全图仅一处）
 
 ```java
-public class EvaluateBranch implements BranchCondition<InterviewState> {
-    @Override
-    public String decide(InterviewState s) {
-        if (s.isShouldStop())                             return "end";
-        if (s.getQuestionIndex() >= s.getMaxQuestions())  return "end";
+// flow/InterviewRouting.java —— 全图唯一的决策纯函数
+public final class InterviewRouting {
+    public static final String END = "end_loop";
 
+    public static String decide(InterviewState s) {
+        if (s.isShouldStop())                            return END;
+        if (s.getQuestionIndex() >= s.getMaxQuestions()) return END;
         EvalResult r = s.getEvalResult();
-        if (r == null) return "continue";
+        if (r == null || r.getNextAction() == null)      return "continue";
         return switch (r.getNextAction()) {
-            case DEEPEN -> "deepen";
-            case LOWER  -> "lower";
-            case SWITCH -> "switch";
-            default     -> "continue";
+            case DEEPEN   -> "deepen";
+            case LOWER    -> "lower";
+            case SWITCH   -> "switch";
+            case CONTINUE -> "continue";
         };
     }
 }
+
+// flow/EvaluateBranch.java —— 只是转发，图引擎只认 BranchCondition
+public class EvaluateBranch implements BranchCondition<InterviewState> {
+    @Override
+    public String decide(InterviewState state) { return InterviewRouting.decide(state); }
+}
 ```
+
+*抽成独立纯函数是因为 `EvaluateNode` 落库 `next_action` 时要用同一套判断——各写一份会导致 DB 记录与实际分支不一致。*
 
 **设计说明：** 相比参考项目（Go 版 Eino 实现）的两处分支判断（一处 `>=`、一处 `>`，易被误读为 off-by-one），本设计**只保留一处判断**。题数检查放在 `evaluate` 之后（此时 `questionIndex` 恰为刚问完那题）；`deepen` 等分支节点只递增 `questionIndex`、不设 `shouldStop`，因此回到 `question` 无需再判断。
 
@@ -297,20 +311,25 @@ public NextAction inferNextAction(double score) {
 **话题池从哪来**：`start` 节点根据 `domain` 从配置文件读取预定义的话题列表，写入 `TopicTracker`：
 
 ```yaml
-# src/main/resources/topics.yml
-Java:
-  - JVM 内存模型
-  - 并发编程
-  - 集合框架
-  - Spring 原理
-  - MySQL
-  - Redis
-Go:
-  - GMP 调度模型
-  - 内存管理与 GC
-  - channel 与并发
-  - 运行时与逃逸分析
+# src/main/resources/application.yml
+app:
+  interview:
+    topics:
+      Java:
+        - JVM 内存模型
+        - 并发编程
+        - 集合框架
+        - Spring 原理
+        - MySQL
+        - Redis
+      Go:
+        - GMP 调度模型
+        - 内存管理与 GC
+        - channel 与并发
+        - 运行时与逃逸分析
 ```
+
+*实现时把话题池合并进了 `application.yml`，避免为读一个独立 yml 引入额外依赖。*
 
 **为什么从配置读而不是让 LLM 现场生成**：话题池决定了整场面试的覆盖面，需要稳定可控、可人工调整，而且省掉一次 LLM 调用。`switch` 时 `TopicTracker` 从未覆盖的话题中挑选。
 
@@ -609,17 +628,20 @@ token = base64( userId + "." + expireAt + "." + hmacSha256(userId + "." + expire
 |---|---|---|
 | 关闭页面 / 浏览器 | 什么都不做 | `in_progress`，状态完好，可继续 |
 | 点「结束面试」 | `cursor` → `end`，跑 end 节点生成报告 | `finished` |
-| LLM 挂 / 请求失败 | 状态未落库，停在上次挂起点 | `in_progress`，可继续 |
+| LLM 挂 / 请求失败 | 游标推进到失败节点并落库，状态完好 | `in_progress`，可继续 |
 
 **「继续面试」不需要专门的恢复逻辑**——现场全在 `state_json` + `cursor` 里，打开页面读一条记录即可。
 
 前端判断逻辑：
 
 ```javascript
-const st = await getState(recordId);
-if (st.status === 'finished')   → 跳复盘页
-else if (st.currentQuestion)    → 直接渲染答题界面
-else                            → 调 /resume 把面试推起来，再渲染
+// 进面试页无条件调一次 /resume，它本身是幂等的：
+//   游标在 wait_answer 且没答案 → 立刻挂起，原样返回当前题目（刷新页面走这条）
+//   游标在 question / evaluate  → 真的往下推一步（上次 LLM 失败后重试走这条）
+//   已结束                      → 返回 finished，前端跳复盘页
+const turn = await resume(recordId);
+if (turn.finished) → 跳复盘页
+else               → 渲染答题界面
 ```
 
 ---
@@ -734,28 +756,9 @@ for (int i = 0; ; i++) {
 
 ## 十、测试策略
 
-| 测什么 | 怎么测 | 需要 Spring |
-|---|---|---|
-| **图引擎** | 纯 JUnit：建小图，验节点顺序、分支路由、挂起恢复、超步数 | ❌ |
-| **分支条件** | 纯 JUnit：喂各种 state，验返回节点名 | ❌ |
-| **各节点** | Mock `LlmClient`，验 prompt 拼装、state 变更 | ❌ |
-| **全流程** | Fake LLM（固定返回）走完 10 题，验状态与落库 | ✅ |
-| **登录 / 上传** | `@SpringBootTest` + MockMvc | ✅ |
+**一期不写自动化测试**（使用者明确要求）。验证方式是编译通过 + 启动应用 + 手工走完一场面试。
 
-图引擎是重点——纯逻辑、无外部依赖，最好测也最该测：
-
-```java
-@Test
-void 挂起后能从断点恢复() {
-    Graph<String> g = new Graph<>();
-    g.addNode("a",    (ctx, s) -> new NodeResult.Next());
-    g.addNode("wait", (ctx, s) -> s.contains("答案")
-            ? new NodeResult.Next() : new NodeResult.Suspend());
-    g.addNode("b",    (ctx, s) -> new NodeResult.Next());
-    // 断言：第一次 SUSPENDED 且 cursor == "wait"
-    //       塞入答案后第二次 FINISHED
-}
-```
+图引擎本身是纯逻辑、无外部依赖，是最适合补测试的部分。若将来要补，优先级为：图引擎主循环（挂起/恢复/超步数）> 分支条件 > 各节点（Mock `LlmClient`）。
 
 ---
 
@@ -763,7 +766,7 @@ void 挂起后能从断点恢复() {
 
 ### 一期（核心主流程）
 
-1. 图引擎（`graph/` 包）+ 单元测试
+1. 图引擎（`graph/` 包）
 2. 数据表 + `schema.sql` + DAO
 3. LLM 客户端封装（DeepSeek + 重试）
 4. 面试流程：`InterviewState` + 8 个节点 + 图定义 + 提示词
