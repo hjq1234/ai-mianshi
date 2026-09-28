@@ -7500,12 +7500,14 @@ java -jar target/ai-mianshi-0.0.1-SNAPSHOT.jar
 浏览器完整走一场面试。
 Expected: 静态页面、接口、数据库读写全部正常 —— 说明打成 jar 之后提示词和前端资源都被正确打进去了。
 
-- [ ] **Step 6: 推送**
+- [ ] **Step 6: 提交收尾**
+
+> **★ 不要 push。** 用户明确要求：代码只 commit，不推到远端。
+> 本任务到此为止，`git push` 一律不做。
 
 ```bash
 git add -A
 git commit -m "chore: 一期完成" --allow-empty
-git push origin main
 ```
 
 - [ ] **Step 7: 对照验收标准自查**
