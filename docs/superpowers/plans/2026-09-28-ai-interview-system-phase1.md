@@ -3642,6 +3642,21 @@ public class InterviewState {
 
 - [ ] **Step 6: 验证序列化能往返**
 
+> **✅ 已验证（2026-09-28）：16/16 通过，`round trip byte-identical: same`。**
+>
+> 验证方式与下面写的有出入，以这里为准：临时类**放在仓库外**，不落进 `src/`，
+> 省掉「创建再删除」两步，也避免误提交。
+> ```bash
+> # 写到系统临时目录，用单文件源码直接运行，classpath 指向 target/classes + 依赖
+> "$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 \
+>   -cp "target/classes;$(cat /tmp/cp.txt)" /tmp/StateJsonSmokeTest.java
+> ```
+> （`/tmp/cp.txt` 由 `dependency:build-classpath -Dmdep.outputFile=/tmp/cp.txt` 生成一次即可。）
+>
+> 结论要点：`Difficulty`/`NextAction` 枚举按 `name()` 存、按 `name()` 还原；
+> `null` 字段（如 `totalScore`）能存活；`List.of()` 与会话中 `ArrayList` 的差异不影响一致性；
+> `public static final` 的 `DIMENSIONS`/`DIMENSION_LABELS` 被 Jackson 正确忽略（static 不序列化）。
+
 创建临时类 `src/main/java/com/ke/nhservice/aimianshi/biz/interview/StateJsonSmokeTest.java`：
 
 ```java
