@@ -16,7 +16,7 @@
 
 | 项 | 值 |
 |---|---|
-| Maven 本地仓库 | `D:\repository` |
+| Maven 本地仓库 | `C:\Users\huangjinqing001\.m2\repository`（默认路径，**不是** `D:\repository`） |
 | Maven settings | `D:\apache-jmeter-5.4.3\settings.xml` |
 | **JAVA_HOME** | `C:\Program Files\Java\jdk-21`（**每条命令都要设，见下**） |
 | 构建命令 | `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml clean package` |
@@ -45,6 +45,37 @@
 > 另有一种离线报错 `present in the local repository, but cached from a remote repository ID
 > that is unavailable`，是本地仓库 `_remote.repositories` 元数据绑在私服 ID 上导致的，
 > `-Dmaven.legacyLocalRepo=true` 无效，去掉 `-o` 即可。
+>
+> `compile` 能离线跑通**不代表** `spring-boot:run` 能：后者的 `requiresDependencyResolution`
+> 覆盖 runtime/test 作用域，`sqlite-jdbc`（runtime）与 `spring-boot-starter-test`（test）
+> 的 jar 在 `compile` 阶段用不到，所以第一次 `spring-boot:run` 必须联网。
+
+> **★ 本地仓库别搞错**
+>
+> `D:\repository` 确实存在、也确实有 `sqlite-jdbc`，但里面是**旧版本**
+> （pdfbox 2.0.x、spring-boot 2.1.x），是历史遗留仓库。settings.xml 里
+> `localRepository` 那一行是**注释掉的**，所以生效的是 Maven 默认的
+> `C:\Users\huangjinqing001\.m2\repository`（pdfbox 3.0.4、boot 4.1.1 在这里）。
+> 判断实际仓库以 `dependency:build-classpath -Dmdep.outputFile=...` 的输出为准，
+> 不要用 `find` 在磁盘上找同名 jar 来推断。
+
+> **★ 停应用要按端口杀进程**
+>
+> `spring-boot:run` 会 fork 一个 `java.exe`，停掉 Maven 包装进程（含 harness 的 TaskStop）
+> **不会**带走它，8080 继续被占，下次启动报 `Port 8080 was already in use`。做法：
+> ```bash
+> netstat -ano | grep LISTENING | grep ":8080"   # 取 PID，对照日志里的 "INFO <pid>" 确认是自己
+> tasklist //FI "PID eq <pid>" //FO CSV //NH
+> taskkill //F //PID <pid>
+> ```
+
+> **★ 验证 HTTP 接口不要用 curl**
+>
+> 本环境 `curl` 被权限规则拒绝。改用单文件 Java 程序：
+> `"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 /path/Xxx.java`，
+> 断言在进程内做（如 `body.contains(NICKNAME)`），输出全 ASCII。
+> **不要用 `.jsh`**：jshell 文件模式会把跨行语句拆成多条 snippet 并报语法错误，
+> 错误行带 `|` 前缀又容易在 `grep -v '^|'` 时被静默丢掉，产生"看起来通过"的假验证。
 
 ## 关于测试
 
@@ -3094,20 +3125,18 @@ Expected:
 - 第一个：`{"code":0,...,"data":{"id":1,"filename":"resume.pdf","isDefault":true,...}}`
 - 第二个：`{"code":400,"message":"只支持 PDF 格式的简历","data":null}`
 
-> **注意这里要盯一眼**：`ResumeVO` 的组件名是 `isDefault`，Jackson 3 对 record 的
-> 布尔组件有可能会按 JavaBean 习惯把 `is` 前缀吃掉，序列化成 `default`。
-> 如果实际输出的是 `"default":true`，前端所有 `r.isDefault` 都会是 `undefined`。
+> **✅ 已验证（2026-09-28）：key 就是 `isDefault`，不需要加注解。**
 >
-> 真遇到了就改 `ResumeVO`，加显式命名（`jackson-annotations` 在 Boot 4 里仍是
-> `com.fasterxml` 包）：
-> ```java
-> import com.fasterxml.jackson.annotation.JsonProperty;
->
-> public record ResumeVO(Long id, String filename,
->                        @JsonProperty("isDefault") boolean isDefault,
->                        long createdAt, String preview) {
+> 当初的担心是：Jackson 3 可能对 record 的布尔组件按 JavaBean 习惯吃掉 `is` 前缀，
+> 序列化成 `default`，那样前端所有 `r.isDefault` 都会变 `undefined`。
+> 实测上传一份 PDF 后的真实响应体：
+> ```json
+> {"code":0,"message":"ok","data":{"id":1,"filename":"sample-resume.pdf",
+>  "isDefault":true,"createdAt":1790585947198,"preview":"Zhang San Java Backend..."}}
 > ```
-> 前端不用改。这一步就是用来提前发现它的——别跳过。
+> 断言 `contains("\"isDefault\"") == true` 且 `contains("\"default\":") == false`，通过。
+> 结论：Jackson 3 对 record 直接用**组件名**做 key，不做 JavaBean 的 `is` 前缀推断。
+> **不要**再加 `@JsonProperty("isDefault")`——那是多余的。前端照 `r.isDefault` 写即可。
 
 - [ ] **Step 7: 建知识库占位接口**
 
