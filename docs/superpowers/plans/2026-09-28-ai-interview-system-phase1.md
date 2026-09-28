@@ -18,12 +18,33 @@
 |---|---|
 | Maven 本地仓库 | `D:\repository` |
 | Maven settings | `D:\apache-jmeter-5.4.3\settings.xml` |
+| **JAVA_HOME** | `C:\Program Files\Java\jdk-21`（**每条命令都要设，见下**） |
 | 构建命令 | `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml clean package` |
-| 编译命令 | `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o compile` |
+| 编译命令 | `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml compile` |
 | 启动命令 | `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml spring-boot:run` |
 | 基础包名 | `com.ke.nhservice.aimianshi` |
 
-> **注意**：`-o`（离线）只在依赖已全部下载后可用；新增依赖的任务不要加 `-o`。
+> **★ JAVA_HOME 必须显式设，否则编译必挂**
+>
+> 这台机器 `JAVA_HOME` 是空的，PATH 上的 `java` 解析到
+> `C:\Program Files (x86)\Common Files\Oracle\Java\java8path\java` —— 那是 **Java 8 的 JRE**，
+> 不带 `javac`。不设 JAVA_HOME 会报：
+> `No compiler is provided in this environment. Perhaps you are running on a JRE rather than a JDK?`
+>
+> 每条 Bash 调用前都要加（**shell 状态不跨调用保留，不能只设一次**）：
+> ```bash
+> export JAVA_HOME="/c/Program Files/Java/jdk-21" && ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml compile
+> ```
+> 迷惑点：`dependency:tree` / `dependency:get` 不需要 javac，不设也能过，
+> 会让人误以为环境正常——只有 `compile` 才暴露。
+
+> **注意**：`-o`（离线）只在依赖**和构建插件**都已下载后可用。
+> 判据不是「业务依赖齐了」，而是「完整跑过一次在线构建」。
+> 典型翻车：`dependency:tree` 全绿，但 `compile` 报
+> `spring-boot-maven-plugin:4.1.1 ... has not been downloaded from it before`。
+> 另有一种离线报错 `present in the local repository, but cached from a remote repository ID
+> that is unavailable`，是本地仓库 `_remote.repositories` 元数据绑在私服 ID 上导致的，
+> `-Dmaven.legacyLocalRepo=true` 无效，去掉 `-o` 即可。
 
 ## 关于测试
 
