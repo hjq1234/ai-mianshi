@@ -1,0 +1,69 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-mianshi
+  datasource:
+    url: jdbc:sqlite:./data/interview.db
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 5
+      # busy_timeout 是「每连接」生效的，所以放在 connection-init-sql 里
+      connection-init-sql: PRAGMA busy_timeout=5000
+  sql:
+    init:
+      # 配合 schema.sql 里的 CREATE TABLE IF NOT EXISTS，每次启动都执行且幂等
+      mode: always
+      schema-locations: classpath:schema.sql
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+app:
+  auth:
+    # 部署时务必换掉，改成足够长的随机串
+    secret: change-me-before-deploy-please
+    ttl-hours: 72
+  llm:
+    # DeepSeek 的 OpenAI 兼容端点。换通义/豆包/Kimi 只改这三行
+    base-url: https://api.deepseek.com
+    api-key: ${DEEPSEEK_API_KEY:}
+    model: deepseek-chat
+    temperature: 0.7
+    connect-timeout-seconds: 10
+    read-timeout-seconds: 120
+  interview:
+    max-questions: 10
+    # 同一话题连续追问到这个次数就强制换话题
+    max-follow-up: 3
+    max-steps: 200
+    # 话题池：switch 节点从这里挑没聊过的话题
+    topics:
+      Java:
+        - JVM 内存模型
+        - 并发编程
+        - 集合框架
+        - Spring 原理
+        - MySQL
+        - Redis
+      Go:
+        - GMP 调度模型
+        - 内存管理与 GC
+        - channel 与并发
+        - 运行时与逃逸分析
+      Python:
+        - GIL 与并发模型
+        - 装饰器与元编程
+        - 异步 asyncio
+        - 内存管理与垃圾回收
+    默认:
+      - 基础知识
+      - 项目经验
+      - 系统设计
+      - 排查与优化
+
+logging:
+  level:
+    com.ke.nhservice.aimianshi: DEBUG

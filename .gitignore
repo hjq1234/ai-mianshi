@@ -31,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 本地数据 ###
+data/
+*.db
