@@ -101,6 +101,15 @@
 配好 Key 后，按 Task 29 Step 7 的三条验收标准一次性补齐验证：
 能完成一场 10 题面试、中途关页面能继续、结束后能看到逐题评分与决策链。
 
+**★ 前端页面（Task 24~27）的验证手段：这台机器上有 node v22**
+（`/c/Program Files/nodejs/node`，不在 PATH 的常规位置但可直接调用）。
+`.js` 和页面内联的 `<script>` 都能用 `new Function(src + 'return {...}')` 装进 node
+逐函数断言（`localStorage`/`location`/`document`/`fetch` 在 `globalThis` 上替换即可），
+再用 `HttpClient` 起真服务验静态资源送达。
+**别只靠「起服务 + 打开浏览器看看」**——JS 报错只会白屏，不告诉你错在哪一行；
+而且是六个页面共用一个 `app.js`，一处写错全站失效。Task 24 的两个 bug
+（列表正则、静态资源 500）都是这么抓出来的。
+
 ---
 
 ## 文件结构总览
@@ -6028,6 +6037,8 @@ git commit -m "feat(interview): 面试接口（start/answer/finish/resume/state/
 - Create: `src/main/resources/static/js/app.js`
 - Create: `src/main/resources/static/css/app.css`
 - Create: `src/main/resources/static/login.html`
+- Modify: `src/main/java/com/ke/nhservice/aimianshi/common/exception/GlobalExceptionHandler.java`
+  ← 原计划没这一步，Step 4 查出「缺失的静态文件返回 500 + ERROR 堆栈」后补的
 
 - [ ] **Step 1: 写 `js/app.js`**
 
@@ -6144,7 +6155,11 @@ function renderMarkdown(text) {
     .replace(/^# (.+)$/gm, '<h2>$1</h2>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>')
+    // ★ 必须贪婪地把「连续的 li」一次包住。原先写的 /(<li>[\s\S]*?<\/li>)/g 是非贪婪的，
+    //   每个 li 会各自包一层 ul —— 报告里两条并列的要点会渲染成两个断开的列表，
+    //   中间还多一道空档。node 里跑出来的实际结果：
+    //   <ul><li>第一点</li></ul>\n<ul><li>第二点</li></ul>
+    .replace(/(<li>.*<\/li>(\n|$))+/g, m => '<ul>' + m.replace(/\n$/, '') + '</ul>')
     .replace(/\n{2,}/g, '</p><p>')
     .replace(/^/, '<p>')
     .replace(/$/, '</p>');
@@ -6170,6 +6185,21 @@ const NEXT_ACTION_LABELS = {
 ```
 
 - [ ] **Step 2: 写 `css/app.css`**
+
+> **★ 这段是设计稿，实际落地的是 `src/main/resources/static/css/app.css`，类名有出入。**
+> Task 25~27 的页面请按**实际文件里的类名**写，可用的类名清单：
+>
+> | 用途 | 类名 |
+> |---|---|
+> | 布局 | `.topbar`（`.brand`/`nav`/`.user`）、`.container`、`.container-wide`、`.card`、`.row`、`.field` |
+> | 文字 | `.muted`、`.right`、`.center`、`.mt8`/`.mt16`/`.mb8`/`.mb16` |
+> | 按钮 | `button`、`button.ghost`、`button.danger`、`button.small` |
+> | 标签分数 | `.tag`（`.primary`/`.success`/`.warning`）、`.score`（`.good`/`.mid`/`.bad`） |
+> | 对话 | `.bubble`（`.interviewer`/`.candidate`，内含 `.who`）、`.feedback`（内含 `.head`） |
+> | 评分 | `.dim-grid`、`.dim-item`（两侧布局，左名右分） |
+> | 其他 | `.progress-bar > i`、`.empty`、`.spinner`、`.report`、`.login-wrap`、`.login-card`（内含 `.sub`/`.hint`） |
+>
+> 注意 `.small` 这个类**没有定义**（只有 `button.small`），小字用 `.muted` 即可。
 
 ```css
 :root {
@@ -6385,57 +6415,68 @@ tbody tr:hover { background: #fafbfc; }
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<div class="login-wrap">
-  <div class="card login-card">
+
+<div class="login-wrap" id="app">
+  <form class="login-card" @submit.prevent="submit">
     <h1>AI 模拟面试</h1>
-    <p class="muted small">用图编排驱动的多轮技术面试</p>
+    <p class="sub">登录后开始一场模拟面试</p>
 
     <div class="field">
       <label>用户名</label>
-      <input v-model="username" @keyup.enter="submit" placeholder="admin">
+      <input v-model.trim="username" autocomplete="username" placeholder="请输入用户名">
     </div>
+
     <div class="field">
       <label>密码</label>
-      <input v-model="password" type="password" @keyup.enter="submit" placeholder="admin123">
+      <input v-model="password" type="password" autocomplete="current-password"
+             placeholder="请输入密码">
     </div>
 
-    <button class="primary" style="width:100%" :disabled="loading" @click="submit">
-      <span v-if="loading" class="spinner"></span>{{ loading ? '登录中…' : '登录' }}
+    <button type="submit" :disabled="loading || !username || !password">
+      <span v-if="loading" class="spinner"></span>
+      {{ loading ? '登录中…' : '登 录' }}
     </button>
 
-    <p class="muted small center" style="margin-top:14px">默认账号 admin / admin123</p>
-  </div>
+    <p class="hint">首次使用默认账号 admin / admin123</p>
+  </form>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
 <script src="js/app.js"></script>
 <script>
-const { createApp } = Vue;
+  const { createApp } = Vue;
 
-createApp({
-  data() {
-    return { username: 'admin', password: '', loading: false };
-  },
-  methods: {
-    async submit() {
-      if (this.loading) return;
-      this.loading = true;
-      try {
-        const data = await api('/api/auth/login', {
-          method: 'POST',
-          body: { username: this.username, password: this.password }
-        });
-        setToken(data.token);
+  createApp({
+    data() {
+      return { username: 'admin', password: '', loading: false };
+    },
+    mounted() {
+      // 已经登录过就直接进首页，不用再登一次
+      if (getToken()) {
         location.replace('index.html');
-      } catch (e) {
-        toast(e.message, true);
-      } finally {
-        this.loading = false;
+      }
+    },
+    methods: {
+      async submit() {
+        this.loading = true;
+        try {
+          const data = await api('/api/auth/login', {
+            method: 'POST',
+            body: { username: this.username, password: this.password }
+          });
+          setToken(data.token);
+          // 用 replace 而不是 href，避免用户点后退又回到登录页
+          location.replace('index.html');
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.loading = false;
+        }
       }
     }
-  }
-}).mount('.login-wrap');
+  }).mount('#app');
 </script>
+
 </body>
 </html>
 ```
@@ -6444,23 +6485,69 @@ createApp({
 > 把 `script src` 换成 `https://cdn.bootcdn.net/ajax/libs/vue/3.5.13/vue.global.prod.js`。
 > 六个页面用的是同一个 URL，全局替换即可。
 
-- [ ] **Step 4: 验证登录页**
+- [ ] **Step 4: 验证（★ 两段式，别只靠肉眼看浏览器）**
+
+**4a. 用 node 把 `app.js` 真跑一遍。** 这台机器上有 node v22
+（`/c/Program Files/nodejs/node`），所以 JS 不用靠肉眼——六个页面共用这一个文件，
+语法错一行全废，而这个错浏览器只会白屏、不报在哪。
+`new Function(src + 'return {...}')` 把 app.js 装进来（它的作用域链是 `globalThis`，
+所以 `localStorage`/`location`/`document`/`fetch` 都能在调用时替换掉），
+再逐个断言。见 `%TEMP%\AppJsCheck.js`，跑法：
 
 ```bash
-./mvnw -s /d/apache-jmeter-5.4.3/settings.xml spring-boot:run
+node "C:/Users/huangjinqing001/AppData/Local/Temp/AppJsCheck.js"
 ```
-浏览器打开 `http://localhost:8080/login.html`。
-Expected：
-1. 页面正常渲染（不是一片空白——空白说明 Vue CDN 没加载成功）
-2. 输入 admin / admin123 点登录 → 跳到 `index.html`（此时会 404，因为还没写，正常）
-3. 打开浏览器控制台执行 `localStorage.getItem('ai-mianshi-token')` 应能看到 token
+
+覆盖：token 读写、`requireLogin`/`logout` 跳转、`api` 的 Bearer 头 / JSON 序列化 /
+FormData 不写 Content-Type / 401 清 token 跳登录 / `code!=0` 抛服务端 message /
+网络异常兜底文案、`fmtTime`/`fmtScore`/`scoreClass`、markdown 转义与列表分组，
+以及**三个常量表必须和后端对齐**（五维 key 与顺序 == `EvalResult.DIMENSIONS`；
+中文名 == 后端 `DIMENSION_LABELS`；难度三档 == `Difficulty.fromLabel` 认的中文）。
+
+**4b. 起真服务验静态资源。** 见 `%TEMP%\StaticWebCheck.java`
+（`curl` 在本环境被权限拒绝，用 JDK 的 HttpClient；这一轮不碰面试接口，不需要假 LLM）：
+
+```bash
+./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -q process-resources   # ★ 先让新文件进 target/classes
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
+CP="target/classes;$(cat /c/Users/huangjinqing001/AppData/Local/Temp/cp.txt)"
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp "$CP" "C:/Users/huangjinqing001/AppData/Local/Temp/StaticWebCheck.java"
+```
+
+最要紧的两条：
+1. **未登录时 `/login.html` 必须返回 200。** 登录页自己被鉴权拦住就是死锁——
+   用户没 token → 打不开登录页 → 拿不到 token。只能起真服务才验得出来。
+2. **`/api/auth/login` 必须不需要 token 就能访问**（`WebConfig` 里
+   `excludePathPatterns("/api/auth/login")`，否则同上死锁）。
+
+其余：`target/classes` 里的三个文件和源码逐字节一致（防止验的是旧构建产物）、
+中文经 HTTP 送达没乱码、`/api/auth/me` 无 token 是 401 有 token 是 200、
+Vue CDN 地址 HEAD 得 200（地址写错六个页面全白屏）。
+
+**★ 这一步抓到两个真 bug：**
+
+1. **`renderMarkdown` 的列表正则写错了**（非贪婪 → 每条 `li` 各包一层 `ul`）。
+   已修，见 Step 1 代码里的注释。
+2. **请求不存在的静态文件会返回 500 并按 ERROR 打整栈。**
+   `GlobalExceptionHandler` 只有兜底的 `@ExceptionHandler(Exception.class)`，
+   而 `NoResourceFoundException`（找不到静态资源）也掉进了兜底分支。
+   后果：浏览器每次打开页面都会自动请求 `/favicon.ico`，于是**每刷一次页面就往日志里
+   灌一条 ERROR 堆栈**——真出问题时反而淹在噪音里找不到有用日志。
+   修法是给 `common/exception/GlobalExceptionHandler.java` 加一条
+   `@ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})`
+   返回 404、日志降到 debug。注意 `handleBiz` 对 404 是「HTTP 200 + code 404」的约定，
+   这条是**静态资源**的 404，走 HTTP 404，两者不冲突。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/main/resources/static/
+git add src/main/resources/static/ \
+        src/main/java/com/ke/nhservice/aimianshi/common/exception/GlobalExceptionHandler.java
 git commit -m "feat(web): 前端公共资源（api 封装/样式）与登录页"
 ```
+
+> Step 4 的预期结果：`AppJsCheck` 全 PASS；`StaticWebCheck` `pass=28 fail=0`，
+> 且启动日志里**不出现**「未预期的异常」。
 
 ---
 
@@ -6469,6 +6556,9 @@ git commit -m "feat(web): 前端公共资源（api 封装/样式）与登录页"
 **Files:**
 - Create: `src/main/resources/static/index.html`
 - Create: `src/main/resources/static/resume.html`
+- Modify: `src/main/resources/static/css/app.css`（`.progress-bar` 选择器、`.actions`/`.chat`/`.dim-item .k|.v`）
+- Modify: `src/main/resources/static/js/app.js`（`topbarHtml` 的导航项，见 Step 4 的说明）
+- Modify: `src/main/java/com/ke/nhservice/aimianshi/common/exception/GlobalExceptionHandler.java`（上传超限）
 
 - [ ] **Step 1: 写 `index.html`**
 
@@ -6806,23 +6896,73 @@ createApp({
 </html>
 ```
 
-- [ ] **Step 4: 验证**
+> **★ 落地时的三处调整**（原规格见上，实现时改了）：
+>
+> 1. **顶栏不手写，用 `topbarHtml('index.html')` + `<div v-html="topbar">`。**
+>    原因是原规格的三个页面各写一份顶栏，而 index.html 那份写的是
+>    `history.html`、Task 24 的 `app.js` 里写的是 `records.html`——**同一个导航两个文件名**，
+>    必然有一个 404。抽成一处就没有这个问题（`AppJsCheck` 里加了断言：
+>    topbar 的每个 href 都要对应一个真实文件）。
+> 2. **导航只三项**：开始面试 / 面试记录 / 我的简历。`interview.html` 不进导航——
+>    它是带 `?id=` 的单场面试页，顶栏要显示题号和「结束面试」，用自己的一份。
+> 3. **`mount('#app')`**，整页包一个根节点（原规格 Step 2 就是这个修正版）。
 
-重启服务，浏览器访问 `http://localhost:8080/index.html`。
-Expected：
-1. 顶部显示昵称，导航可点
-2. 简历下拉里有已上传的简历并自动选中默认那份
-3. 点「开始面试」→ 按钮变 loading 文案 → 跳到 `interview.html?id=1`（此时 404 正常）
+- [ ] **Step 4: 验证（★ 仍然是「node 跑页面脚本」+「真服务验送达」两段）**
 
-再访问 `resume.html`，上传一个 PDF。
-Expected：上传成功后列表出现该文件，标着「默认」；删除、设为默认都能用。
+**4a. 后端接口**：`%TEMP%\ResumeApiCheck.java`，一条命令跑完
+（造 PDF 用 classpath 上的 PDFBox 3.0.4）：
+
+```bash
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
+CP="target/classes;$(cat /c/Users/huangjinqing001/AppData/Local/Temp/cp.txt)"
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp "$CP" "C:/Users/huangjinqing001/AppData/Local/Temp/ResumeApiCheck.java"
+```
+
+覆盖上传/列表/设默认/删除全链路，外加三条错误分支（非 PDF、扫描件、超 10MB），
+以及面试列表的字段齐不齐。**最要紧的一条**：
+
+> **★ `ResumeVO` 是 record，分量名叫 `isDefault`（boolean）。**
+> Jackson 对 record 的布尔分量到底序列化成 `"isDefault"` 还是 `"default"`？
+> **猜不得**——两个页面都读 `r.isDefault`，键名一变「默认」标签和默认简历预选
+> 就静静失效（不报错）。实测是 `"isDefault"`，断言写成键名原文比对。
+
+**4b. 页面脚本**：`%TEMP%\PageCheck.js`，把内联 `<script>` 装进 node 真跑
+（Vue 换成假的 `createApp` 截下 options，`api()` 换成路由表，夹具用真服务返回过的 JSON，
+手工拼 vm 后跑 `mounted()`）：
+
+```bash
+node "C:/Users/huangjinqing001/AppData/Local/Temp/PageCheck.js"
+```
+
+值得跑的理由：页面里全是「和后端约定」但没人检查的字面量——提交的字段名、
+读的 JSON 键名、跳转的文件名。写错了浏览器不报错，只是点了没反应。
+断言里有两条特别值钱：
+- ★ `start()` 提交的字段名与 `StartInterviewRequest` 完全一致（`resumeId/position/company/domain/difficulty`）
+- ★ 上传体是 `FormData` 且字段名是 `file`（后端 `@RequestParam("file")`），且不手写 Content-Type
+
+**4c. 送达**：`StaticWebCheck.java` 已扩展成遍历所有已存在的页面，
+另加一条「访问 `/` 直接得到 index.html」——用户只会敲域名，不会敲 index.html。
+
+**★ 这一步抓到的问题：**
+
+1. **上传超 10MB 时用户看到英文报错 + 一整条 ERROR 堆栈。**
+   Spring 抛出 `MaxUploadSizeExceededException`，掉进兜底分支变成
+   「服务器内部错误：Maximum upload size exceeded」。而简历页上明明写着「不超过 10MB」——
+   用户照着做本不该看到报错。修法：`GlobalExceptionHandler` 加一条
+   `@ExceptionHandler(MaxUploadSizeExceededException.class)` → `400 文件超过 10MB 上限，请压缩后再上传`。
+2. **`css/app.css` 的进度条选择器写窄了**：`.progress-bar > i`，
+   而页面里写的是 `<div :style>`。宽度设了也不显示（元素高度为 0）。
+   改成 `.progress-bar > *`。这条是 Task 26 的面试页要用的，提前修掉。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add src/main/resources/static/
+git add src/main/resources/static/ \
+        src/main/java/com/ke/nhservice/aimianshi/common/exception/GlobalExceptionHandler.java
 git commit -m "feat(web): 首页面试配置与简历管理页"
 ```
+
+> Step 4 预期：`ResumeApiCheck` pass=25；`PageCheck` pass=48；`StaticWebCheck` pass=32。
 
 ---
 
@@ -7093,18 +7233,43 @@ createApp({
 </html>
 ```
 
-- [ ] **Step 3: 验证完整面试流程**
+> **★ 落地时的三处调整**（原规格见上）：
+>
+> 1. **`scoreClass` 不再各页重定义**，直接用 `app.js` 里那一份。
+>    原规格在 `interview.html` 和 `history.html` 里各抄了一遍（`score >= 4` 的写法），
+>    逻辑虽然等价，但两处以后必然有一个被改歪。
+> 2. `.muted small` → `.muted`（`.small` 没定义过），进度条那段抽成 `computed: progress`。
+> 3. `interview.html` 的顶栏加了「开始面试」链接，和其余页面一致。
 
-重启服务，浏览器从 `index.html` 点「开始面试」。
-Expected：
-1. loading 文案出现，等 5-15 秒后显示第一道题
-2. 顶部显示「第 1/10 题 · 均分 -」
-3. 输入一段回答点提交 → loading → 出现黄色反馈卡（分数 + 分支标签 + 五维小格子）+ 下一题
-4. 答 3-4 题后按 `F5` 刷新页面 → **回到当前那道题，进度和均分都还在**（这就是断点续传）
-5. 点「结束面试」→ 跳 `report.html?id=x`（此时 404 正常）
+- [ ] **Step 3: 验证（三段，不用真 Key）**
 
-再访问 `history.html`。
-Expected：列出刚才那场，状态「已结束」，有均分，点「查看复盘」。
+**3a. `ApiCheck`（Task 23 写的那个端到端）加了一条契约断言后重跑：**
+
+```bash
+./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -q compile
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
+CP="target/classes;$(cat /c/Users/huangjinqing001/AppData/Local/Temp/cp.txt)"
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp "$CP" "C:/Users/huangjinqing001/AppData/Local/Temp/ApiCheck.java"
+```
+
+> **★ 新加的那条最关键**：断言 turn JSON 的 **16 个键**
+> （`recordId/status/finished/questionIndex/total/question/topic/difficulty/
+> lastScore/lastDimensions/lastComment/nextAction/averageScore/report/error`）
+> 与 `interview.html` 读的字段名逐一对应。
+> 字段改名的话页面**不会报错，只是静静地不显示**，只有在接口这一层钉死才防得住。
+
+**3b. `PageCheck` 跑页面脚本**（`node PageCheck.js`）：interview.html 断言
+载入走 `/resume` 幂等路径、进度条按「已答完几题」算（第 4 题 → 30%）、
+提交走 `POST /answer` 且字段名是 `answer`、答完最后一题自动跳 `report.html?id=`、
+结束面试要确认、**地址栏没有 `?id=` 时回首页且不发任何请求**、
+载入失败时退出载入态不白屏。history.html 断言按状态分流到复盘页/面试页、
+`totalScore` 为 null 时显示 `-` 而不是 `NaN`、载入失败不永远显示「载入中」。
+
+**3c. `StaticWebCheck` 遍历五个页面**逐个验未登录可打开、内容与源码逐字节一致。
+
+> 这三段合起来覆盖了原规格里「浏览器点一遍」的全部断言点
+> （第 1/10 题、反馈卡、F5 后进度还在、结束跳复盘页、记录列表按状态分流），
+> 而且不依赖真 LLM。**剩下真正需要人眼看的只有 UI 观感。**
 
 - [ ] **Step 4: 提交**
 
@@ -7113,6 +7278,8 @@ git add src/main/resources/static/
 git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录列表"
 ```
 
+> Step 3 预期：`ApiCheck` pass=43；`PageCheck` pass=89；`StaticWebCheck` pass=34。
+
 ---
 
 ## Task 27: 前端 —— 复盘页
@@ -7120,10 +7287,16 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
 **Files:**
 - Create: `src/main/resources/static/report.html`
 
-- [ ] **Step 1: 写 `report.html`**
+- [x] **Step 1: 写 `report.html`**
 
 一期只做「逐题详情 + 决策链表格 + AI 综合报告」。图表（雷达图、趋势图、图路径）
 是二期的事，但数据一期就采全了，接口形状不用改。
+
+**复盘页只需要一个接口**：`GET /api/interview/{id}/detail`。逐题评分、决策链（`nextAction` /
+`nextTopic`）、五维明细、AI 报告、图执行轨迹全在这一个 VO 里，页面不用拼三个请求。
+
+草稿里那一版有几处和实际写法不一致，落地时都改了（原因见下面的修正表），
+下面贴的是真正 ship 出去的那份：
 
 ```html
 <!DOCTYPE html>
@@ -7135,42 +7308,45 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+
 <div id="app">
-  <div class="topbar">
-    <span class="brand">AI 模拟面试</span>
-    <nav>
-      <a href="index.html">开始面试</a>
-      <a href="history.html" class="active">面试记录</a>
-      <a href="resume.html">我的简历</a>
-    </nav>
-    <span class="user">{{ nickname }} <button class="small" @click="logout">退出</button></span>
-  </div>
+  <div v-html="topbar"></div>
 
   <div class="container-wide">
     <div v-if="loading" class="card center muted">正在载入复盘数据…</div>
 
-    <template v-else-if="detail">
+    <div v-else-if="!detail" class="card center">
+      <p class="muted">这份复盘没能载入。</p>
+      <a href="history.html">回到面试记录</a>
+    </div>
+
+    <template v-else>
       <!-- 概览 -->
       <div class="card">
-        <div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap">
-          <h2 style="margin:0">{{ detail.position || '技术面试' }}
-            <span class="muted small" v-if="detail.company">· {{ detail.company }}</span>
+        <div class="row" style="align-items:baseline">
+          <h2 style="margin:0">
+            {{ detail.position || '技术面试' }}
+            <span class="muted" v-if="detail.company">· {{ detail.company }}</span>
           </h2>
           <span class="tag">{{ detail.domain }}</span>
           <span class="tag">{{ detail.difficulty }}</span>
-          <span class="muted small">{{ fmtTime(detail.createdAt) }}</span>
+          <span class="muted">{{ fmtTime(detail.createdAt) }}</span>
           <span style="flex:1"></span>
           <span>
-            <span class="score" :class="scoreClass(detail.totalScore)">{{ fmtScore(detail.totalScore) }}</span>
+            <span class="score" :class="scoreClass(detail.totalScore)">
+              {{ fmtScore(detail.totalScore) }}
+            </span>
             <span class="muted"> / 10</span>
           </span>
         </div>
-        <p class="muted small" style="margin:10px 0 0">
+        <p class="muted mt8">
           共 {{ detail.dialogues.length }} 题 ·
           覆盖 {{ coveredTopicCount }} 个话题 ·
           {{ detail.status === 'finished' ? '已结束' : '进行中' }}
         </p>
-        <div v-if="detail.error" class="feedback" style="background:#fdecec;border-color:#f5c2c2;margin-top:12px">
+        <!-- 提前结束或引擎跑挂时，这里说明原因 -->
+        <div v-if="detail.error" class="feedback mt16"
+             style="background:#fdecec;border-color:#f5c2c2">
           {{ detail.error }}
         </div>
       </div>
@@ -7178,7 +7354,7 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
       <!-- 决策链：图是怎么走的 -->
       <div class="card">
         <h2>图的分支决策链</h2>
-        <p class="muted small">
+        <p class="sub">
           每一轮评分后，图根据得分和话题覆盖度决定下一步。这张表就是那次决策的记录。
         </p>
         <table>
@@ -7193,13 +7369,15 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
               <td>{{ d.seq }}</td>
               <td>{{ d.topic || '-' }}</td>
               <td>{{ d.difficulty || '-' }}</td>
-              <td><span class="score" :class="scoreClass(d.score)" style="font-size:15px">{{ fmtScore(d.score) }}</span></td>
+              <td>
+                <span class="score" :class="scoreClass(d.score)">{{ fmtScore(d.score) }}</span>
+              </td>
               <td>
                 <span class="tag" :class="routingTagClass(d.nextAction)">
-                  → {{ NEXT_ACTION_LABELS[d.nextAction] || d.nextAction }}
+                  → {{ NEXT_ACTION_LABELS[d.nextAction] || d.nextAction || '-' }}
                 </span>
               </td>
-              <td class="muted small">
+              <td class="muted">
                 {{ d.comment }}
                 <span v-if="d.nextTopic">（换到：{{ d.nextTopic }}）</span>
               </td>
@@ -7213,22 +7391,24 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
         <h2>逐题详情</h2>
         <div v-for="d in detail.dialogues" :key="d.seq"
              style="border-bottom:1px solid var(--border);padding:14px 0">
-          <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <div class="row" style="align-items:baseline">
             <strong>第 {{ d.seq }} 题</strong>
-            <span class="tag">{{ d.topic }}</span>
-            <span class="tag">{{ d.difficulty }}</span>
+            <span class="tag">{{ d.topic || '综合' }}</span>
+            <span class="tag">{{ d.difficulty || '-' }}</span>
             <span style="flex:1"></span>
-            <span class="score" :class="scoreClass(d.score)" style="font-size:16px">{{ fmtScore(d.score) }}</span>
+            <span class="score" :class="scoreClass(d.score)">{{ fmtScore(d.score) }}</span>
           </div>
 
-          <p style="margin:8px 0 4px"><span class="muted small">问：</span>{{ d.question }}</p>
-          <p style="margin:4px 0;white-space:pre-wrap"><span class="muted small">答：</span>{{ d.answer }}</p>
-          <p style="margin:4px 0" v-if="d.comment"><span class="muted small">评语：</span>{{ d.comment }}</p>
+          <p class="mt8"><span class="muted">问：</span>{{ d.question }}</p>
+          <p class="mt8" style="white-space:pre-wrap">
+            <span class="muted">答：</span>{{ d.answer || '（未作答）' }}
+          </p>
+          <p class="mt8" v-if="d.comment"><span class="muted">评语：</span>{{ d.comment }}</p>
 
-          <div class="dim-grid" v-if="d.dimensions">
+          <div class="dim-grid mt8" v-if="d.dimensions">
             <div class="dim-item" v-for="(v, k) in d.dimensions" :key="k">
-              <div class="k">{{ DIMENSION_LABELS[k] || k }}</div>
-              <div class="v">{{ fmtScore(v) }}</div>
+              <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
+              <span class="v">{{ fmtScore(v) }}</span>
             </div>
           </div>
         </div>
@@ -7237,16 +7417,16 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
       <!-- 综合报告 -->
       <div class="card">
         <h2>AI 综合报告</h2>
-        <div v-if="detail.report" v-html="renderMarkdown(detail.report)"></div>
+        <div class="report" v-if="detail.report" v-html="renderMarkdown(detail.report)"></div>
         <div v-else class="muted">这场面试还没结束，结束之后才会有综合报告。</div>
       </div>
 
-      <!-- 图执行轨迹（折叠） -->
+      <!-- 图执行轨迹（默认折叠，10 题能有一两百条） -->
       <div class="card">
         <h2 style="cursor:pointer" @click="showTrace = !showTrace">
           图执行轨迹（{{ detail.traces.length }} 条）{{ showTrace ? '▾' : '▸' }}
         </h2>
-        <p class="muted small">
+        <p class="sub">
           引擎每进出一个节点、每做一次分支决策都会记一条。二期用它画路径可视化图。
         </p>
         <table v-if="showTrace">
@@ -7260,7 +7440,7 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
               <td>{{ t.nodeName }}</td>
               <td><span class="tag">{{ t.nodeType }}</span></td>
               <td>{{ t.toNode || '-' }}</td>
-              <td class="muted small">{{ t.costMs }} ms</td>
+              <td class="muted">{{ t.costMs }} ms</td>
               <td>
                 <span v-if="t.status === 'error'" class="tag" style="color:var(--danger)">error</span>
                 <span v-else-if="t.status === 'suspend'" class="tag warning">挂起</span>
@@ -7277,79 +7457,126 @@ git commit -m "feat(web): 面试进行页（对话流 + 实时评分）与记录
 <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
 <script src="js/app.js"></script>
 <script>
-const { createApp } = Vue;
+  const { createApp } = Vue;
 
-createApp({
-  data() {
-    return {
-      nickname: '',
-      detail: null,
-      loading: true,
-      showTrace: false,
-      DIMENSION_LABELS, NEXT_ACTION_LABELS, renderMarkdown
-    };
-  },
-  computed: {
-    coveredTopicCount() {
-      if (!this.detail) return 0;
-      return new Set(this.detail.dialogues.map(d => d.topic).filter(Boolean)).size;
-    }
-  },
-  async mounted() {
-    if (!requireLogin()) return;
-    const id = new URLSearchParams(location.search).get('id');
-    if (!id) { location.replace('history.html'); return; }
-    try {
-      const me = await api('/api/auth/me');
-      this.nickname = me.nickname || me.username;
-      this.detail = await api('/api/interview/' + id + '/detail');
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      this.loading = false;
-    }
-  },
-  methods: {
-    logout,
-    fmtTime,
-    fmtScore,
-    renderMarkdown,
-    scoreClass(score) {
-      if (score === null || score === undefined) return '';
-      if (score >= 8) return 'good';
-      if (score >= 4) return 'mid';
-      return 'bad';
+  createApp({
+    data() {
+      return {
+        topbar: topbarHtml('history.html'),
+        detail: null,
+        loading: true,
+        showTrace: false,
+        DIMENSION_LABELS,
+        NEXT_ACTION_LABELS
+      };
     },
-    routingTagClass(action) {
-      if (action === 'deepen') return 'success';
-      if (action === 'lower') return 'warning';
-      if (action === 'end') return 'primary';
-      return '';
+    computed: {
+      coveredTopicCount() {
+        if (!this.detail) return 0;
+        return new Set(this.detail.dialogues.map(d => d.topic).filter(Boolean)).size;
+      }
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+
+      const id = new URLSearchParams(location.search).get('id');
+      if (!id) {
+        location.replace('history.html');
+        return;
+      }
+
+      fillNickname();
+      try {
+        // 复盘只用这一个接口：逐题评分 + 决策链 + 轨迹 + 报告都在里面
+        this.detail = await api('/api/interview/' + id + '/detail');
+      } catch (e) {
+        toast(e.message, true);
+      } finally {
+        this.loading = false;
+      }
+    },
+    methods: {
+      fmtTime,
+      fmtScore,
+      scoreClass,
+      renderMarkdown,
+      routingTagClass(action) {
+        if (action === 'deepen') return 'success';
+        if (action === 'lower') return 'warning';
+        if (action === 'end') return 'primary';
+        return '';
+      }
     }
-  }
-}).mount('#app');
+  }).mount('#app');
 </script>
+
 </body>
 </html>
 ```
 
-- [ ] **Step 2: 端到端验收**
+**落地时的五处修正（都是草稿写错、被测出来的）：**
 
-重启服务，从 `history.html` 点「查看复盘」进 `report.html`。
-Expected：
-1. 顶部概览显示总分、题数、话题数
-2. 「图的分支决策链」表格里每题的 `nextAction` 有值且和得分对得上
-   （高分 → 深入追问，低分 → 降低难度，连续追同话题 3 次后 → 更换话题）
-3. 逐题详情展开正常，五维小格子有数
-4. AI 综合报告正常渲染成 markdown（标题、列表、粗体）
-5. 点开「图执行轨迹」，能看到 `start / question / wait_answer / evaluate / deepen(branch)` 这样的序列
+| 草稿写法 | 实际写法 | 为什么 |
+| --- | --- | --- |
+| 手写 `.topbar` 那一坨，`@click="logout"` | `<div v-html="topbar">` + `topbarHtml('history.html')` | Task 24 把顶栏抽成了公共函数，六个页面共用一份；各写一遍迟早对不上（上一轮就是 `records.html` / `history.html` 混用） |
+| `class="muted small"` | `class="muted"` / `class="sub"` | `app.css` 里**只定义了 `button.small`**，没有 `.small`。`muted small` 在页面上只是变灰、字号并不变小——这种「以为设了其实没设」的类最容易一路带到上线 |
+| `mounted` 里 `api('/api/auth/me')` 取昵称再赋值 | `fillNickname()` | 公共函数里已经有了，且处理了「取昵称失败不打断页面」。页面再写一遍就是两份实现 |
+| `renderMarkdown` 同时出现在 `data` 和 `methods` | 常量进 `data`，函数只进 `methods` | 两处同名时模板取到的是 `data` 里那个，Vue 会警告冲突 |
+| `.dim-item` 里用 `<div class="k">` | `<span class="k">` | `.dim-item` 是 flex 行，`div` 各占一整行，五个小格子会竖着堆起来 |
 
-**验收标准（设计文档 11.1）：能真实完成一场 10 题面试，中途关页面再回来能继续，结束后能看到逐题评分与决策链。** 到这一步应该全部满足。
+**`v-html="renderMarkdown(detail.report)"` 是必须的**：报告是 LLM 吐的 markdown，
+要渲染成标题/列表/粗体就得过 `v-html`，而过 `v-html` 就有 XSS 风险。
+`renderMarkdown` 内部先转义 HTML 再拼标签，所以 LLM 万一吐出 `<img onerror>` 也只会当纯文本显示——这条有断言盯着。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 2: 三个层次的自动验收**
+
+人工开浏览器点一遍是最后一步（Task 29），这一层先用程序把能自动判的都判掉。
+跟 Task 25/26 一样三段：静态资源真 HTTP、`app.js` 沙箱、页面内联脚本沙箱。
+
+**① 夹具必须先由真服务生成。** 上一轮复盘页的用例全是手抄的 JSON，问题很明显：
+键名抄错、少个字段，检查就成了自说自话。这一轮改成 `ApiCheck` / `ResumeApiCheck`
+把真响应的 `data` 落成文件（`%TEMP%\aims-fixtures\`），`PageCheck.js` 读它：
 
 ```bash
-git add src/main/resources/static/
+# 先跑两个 Java 检查生成夹具，再跑 node 检查页面
+"$JAVA_HOME/bin/java" -cp "$CP" "$TEMP/ApiCheck.java"        # 43/43，顺带写 detail/turn/turn-answered/list.json
+"$JAVA_HOME/bin/java" -cp "$CP" "$TEMP/ResumeApiCheck.java"  # 25/25，顺带写 resumes.json / records-in-progress.json
+node "$TEMP/AppJsCheck.js"                                   # 51/51
+node "$TEMP/PageCheck.js"                                    # 115/115
+"$JAVA_HOME/bin/java" -cp "$CP" "$TEMP/StaticWebCheck.java"  # 34/34
+```
+
+夹具一换真，立刻暴露出**测试自己写死了夹具的值**：`total` 写 10（真夹具是 4）、
+`lastScore` 写 8.5（真是 9.0）、记录 id 写 5（真是 1）、`isDefault` 假定在下标 1。
+最要命的是最后一条——`interview.html` 答完最后一题跳的是 `report.html?id=` + **后端返回的
+recordId**，而测试用 URL 上的 `?id=5` 发请求，两个 id 不一致时测试自己先骗了自己
+（实际跳成了 `?id=1`，断言却按 5 写，正好是红的）。现在一律 `const RID = TURN_ANSWERED.recordId`
+从夹具取，写死值清零。
+
+**② 契约断言**（页面读什么键，就断言那个键真的在后端 JSON 里）：
+
+- `detail` 顶层 11 个键、每题 10 个键（含 `nextAction` / `nextTopic` / `dimensions`）、轨迹 7 个键
+- 决策链里出现过的每个 `nextAction` 都能在 `NEXT_ACTION_LABELS` 里找到中文——
+  将来后端加了新分支值而前端忘了配，这里会立刻红，而不是页面上露一个英文枚举
+- 五维 key 与 `DIMENSION_LABELS` 完全对得上
+- 顶栏里每个 `.html` 链接都指向真实文件（这条上一轮抓到过 `records.html` 的 404）
+
+**③ 页面逻辑断言**：
+
+- `coveredTopicCount` 是**去重后**的话题数（真夹具 4 题 2 话题，不是 4）
+- `routingTagClass`：`deepen`→`success`、`lower`→`warning`、`end`→`primary`、其余不配色
+- 轨迹默认折叠
+- 报告 markdown 渲染出 `<h3>`；同时断言 `<img src=x onerror=y>` **不会**变成真标签
+- `report` 为 null（没结束）时不炸；地址栏没 `?id=` 时回 `history.html` 且不发请求；
+  载入失败时提示 + 退出载入态 + 不白屏
+
+**验收标准（设计文档 11.1）：能真实完成一场 10 题面试，中途关页面再回来能继续，结束后能看到逐题评分与决策链。**
+这一层验的是「页面拿到真实 JSON 后确实渲染得出」，真实 LLM 那一遍留给 Task 29。
+
+- [x] **Step 3: 提交**
+
+```bash
+git add src/main/resources/static/report.html
 git commit -m "feat(web): 复盘页（概览 + 决策链 + 逐题详情 + 综合报告 + 执行轨迹）"
 ```
 
