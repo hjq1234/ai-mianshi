@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>面试进行中 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div class="topbar">
+    <span class="brand">AI 模拟面试</span>
+    <nav>
+      <a href="index.html">开始面试</a>
+      <a href="history.html">面试记录</a>
+    </nav>
+    <span class="user">
+      <span v-if="turn && !turn.finished" class="muted">
+        第 {{ turn.questionIndex }}/{{ turn.total }} 题 · 均分 {{ fmtScore(turn.averageScore) }}
+      </span>
+      <button class="small danger" v-if="turn && !turn.finished" :disabled="submitting"
+              @click="finish">结束面试</button>
+    </span>
+  </div>
+
+  <div class="container">
+    <div class="progress-bar" v-if="turn && !turn.finished">
+      <div :style="{ width: progress }"></div>
+    </div>
+
+    <div v-if="booting" class="card center muted">正在载入面试现场…</div>
+
+    <template v-else-if="turn">
+      <div class="card">
+        <div class="chat">
+          <!-- 上一题的反馈：评分 + 走的分支 + 五维明细 -->
+          <div class="feedback" v-if="turn.lastScore != null">
+            <div class="head">
+              <span class="score" :class="scoreClass(turn.lastScore)">
+                {{ fmtScore(turn.lastScore) }}
+              </span>
+              <span class="tag">{{ NEXT_ACTION_LABELS[turn.nextAction] || turn.nextAction }}</span>
+              <span class="muted" v-if="turn.lastComment">评语</span>
+            </div>
+            <div v-if="turn.lastComment">{{ turn.lastComment }}</div>
+            <div class="dim-grid mt8" v-if="turn.lastDimensions">
+              <div class="dim-item" v-for="(v, k) in turn.lastDimensions" :key="k">
+                <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
+                <span class="v">{{ fmtScore(v) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="bubble interviewer" v-if="turn.question">
+            <span class="who">
+              第 {{ turn.questionIndex }} 题 · {{ turn.topic || '综合' }} · {{ turn.difficulty || '-' }}
+            </span>
+            {{ turn.question }}
+          </div>
+
+          <div class="bubble candidate" v-if="lastAnswer">{{ lastAnswer }}</div>
+        </div>
+
+        <!-- 图跑挂了：进度已落库，能接着答，所以只是提示，不是错误页 -->
+        <div v-if="turn.error" class="feedback" style="background:#fdecec;border-color:#f5c2c2">
+          {{ turn.error }}
+        </div>
+
+        <div v-if="!turn.finished" class="actions">
+          <textarea v-model="answer" :disabled="submitting"
+                    placeholder="写下你的回答…（Ctrl+Enter 提交）"
+                    @keydown.ctrl.enter="submit"></textarea>
+          <div class="actions">
+            <button :disabled="submitting || !answer.trim()" @click="submit">
+              <span v-if="submitting" class="spinner"></span>
+              {{ submitting ? '面试官正在评估…' : '提交回答' }}
+            </button>
+          </div>
+          <p class="muted mt8" v-if="submitting">
+            AI 服务繁忙时会自动重试，最长约 1.5 分钟，请勿刷新页面。
+          </p>
+        </div>
+      </div>
+    </template>
+
+    <div v-else class="card center">
+      <p class="muted">这场面试没能载入。</p>
+      <a href="index.html">回到首页</a>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        recordId: null,
+        turn: null,
+        answer: '',
+        lastAnswer: '',
+        submitting: false,
+        booting: true,
+        DIMENSION_LABELS,
+        NEXT_ACTION_LABELS
+      };
+    },
+    computed: {
+      // 答完第 n 题时进度是 (n-1)/total，最后一题答完跳复盘页，所以不会到 100%
+      progress() {
+        const t = this.turn;
+        if (!t || !t.total) return '0%';
+        return Math.min(100, (t.questionIndex - 1) / t.total * 100) + '%';
+      }
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+
+      const id = new URLSearchParams(location.search).get('id');
+      if (!id) {
+        location.replace('index.html');
+        return;
+      }
+      this.recordId = id;
+
+      try {
+        // 载入现场走 resume，它是幂等的：游标停在 wait_answer 且没有答案时会
+        // 立刻挂起并返回当前题目。所以「刷新页面」「关掉再回来」「上次 LLM 失败后
+        // 重试」走的都是同一条路径，不需要各写一套。
+        this.apply(await api('/api/interview/' + id + '/resume', { method: 'POST' }));
+      } catch (e) {
+        toast(e.message, true);
+        this.booting = false;
+      }
+    },
+    methods: {
+      fmtScore,
+      scoreClass,
+      apply(turn) {
+        this.turn = turn;
+        this.booting = false;
+        if (turn.finished) {
+          location.replace('report.html?id=' + turn.recordId);
+        }
+      },
+      async submit() {
+        if (this.submitting || !this.answer.trim()) return;
+        this.submitting = true;
+        const submitted = this.answer.trim();
+        try {
+          const turn = await api('/api/interview/' + this.recordId + '/answer', {
+            method: 'POST',
+            body: { answer: submitted }
+          });
+          this.lastAnswer = submitted;
+          this.answer = '';
+          this.apply(turn);
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.submitting = false;
+        }
+      },
+      async finish() {
+        if (!confirm('确定结束这场面试？结束后会生成本次的综合报告。')) return;
+        this.submitting = true;
+        try {
+          this.apply(await api('/api/interview/' + this.recordId + '/finish', { method: 'POST' }));
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.submitting = false;
+        }
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>面试记录 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div v-html="topbar"></div>
+
+  <div class="container-wide">
+    <div class="card">
+      <h2>面试记录</h2>
+      <p class="sub">进行中的可以接着答；已结束的点进去看逐题评分和 AI 综合报告。</p>
+
+      <div v-if="loading" class="empty">载入中…</div>
+      <div v-else-if="list.length === 0" class="empty">
+        还没有面试记录，<a href="index.html">去开始一场</a>
+      </div>
+      <table v-else>
+        <thead>
+          <tr>
+            <th>岗位</th><th>公司</th><th>方向</th><th>难度</th>
+            <th>已答</th><th>均分</th><th>状态</th><th>开始时间</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in list" :key="r.id">
+            <td>{{ r.position || '-' }}</td>
+            <td>{{ r.company || '-' }}</td>
+            <td>{{ r.domain || '-' }}</td>
+            <td>{{ r.difficulty || '-' }}</td>
+            <td>{{ r.dialogueCount }} 题</td>
+            <td>
+              <span class="score" :class="scoreClass(r.totalScore)">
+                {{ fmtScore(r.totalScore) }}
+              </span>
+            </td>
+            <td>
+              <span v-if="r.status === 'finished'" class="tag success">已结束</span>
+              <span v-else class="tag warning">进行中</span>
+            </td>
+            <td class="muted">{{ fmtTime(r.createdAt) }}</td>
+            <td class="right">
+              <button v-if="r.status === 'finished'" class="small"
+                      @click="go('report.html', r.id)">查看复盘</button>
+              <button v-else class="small" @click="go('interview.html', r.id)">继续面试</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        topbar: topbarHtml('history.html'),
+        list: [],
+        loading: true
+      };
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+      fillNickname();
+      try {
+        this.list = await api('/api/interview/list?page=1&size=100');
+      } catch (e) {
+        toast(e.message, true);
+      } finally {
+        this.loading = false;
+      }
+    },
+    methods: {
+      fmtTime,
+      fmtScore,
+      scoreClass,
+      go(page, id) { location.href = page + '?id=' + id; }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>
