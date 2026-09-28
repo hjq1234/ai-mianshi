@@ -36,6 +36,14 @@ public class InterviewState {
     // ── 分支节点写入的「下一题方向」──
     private String nextActionHint;
 
+    /**
+     * 本题路由为 switch 时，接下来要聊的话题（由 EvaluateNode 挑好）。
+     * SwitchNode 只负责把它落到 currentTopic 上，不重新挑一次——
+     * 否则「落库的 next_topic」和「实际聊的话题」会各算各的，迟早对不上。
+     * 非 switch 路由时显式置 null，避免残留上一轮的旧值。
+     */
+    private String nextTopic;
+
     // ── 累积状态（跨轮次）──
     private List<Dialogue> dialogues = new ArrayList<>();
     private ScoreHistory scoreHistory = new ScoreHistory();
@@ -110,6 +118,10 @@ public class InterviewState {
     public String getNextActionHint() { return nextActionHint; }
 
     public void setNextActionHint(String nextActionHint) { this.nextActionHint = nextActionHint; }
+
+    public String getNextTopic() { return nextTopic; }
+
+    public void setNextTopic(String nextTopic) { this.nextTopic = nextTopic; }
 
     public List<Dialogue> getDialogues() { return dialogues; }
 

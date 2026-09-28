@@ -29,6 +29,7 @@ import java.util.Map;
  * 2. 话题追踪（覆盖度、连续追问计数、必要时强制换话题）
  * 3. 落库 t_interview_dialogue（含图的分支决策）
  * 4. 清掉已消费的 answer，把本题推入滑动窗口
+ * 5. switch 路由下挑好下一个话题写进 state.nextTopic，交给 SwitchNode 执行
  *
  * 关于落库的 next_action：用的是 InterviewRouting.decide() —— 和紧接着执行的分支
  * 判断是同一个纯函数。此时 state 还没被分支节点改动，所以算出来的结果和分支
@@ -70,7 +71,16 @@ public class EvaluateNode implements Node<InterviewState> {
         String routing = InterviewRouting.decide(state);
         state.setLastRouting(routing);
 
-        String nextTopic = "switch".equals(routing) ? tracker.suggestNextTopic() : null;
+        // ★ 顺序要紧：先把刚答完的这题标记成已覆盖，再挑下一个话题。
+        // 反过来的话 suggestNextTopic() 会把当前话题又挑出来（它此刻还没被标记），
+        // 于是落库的 next_topic 是旧话题、而 SwitchNode 稍后挑到的是新话题，两者对不上。
+        tracker.markCovered(tracker.getCurrentTopic());
+
+        // 只在 switch 路由下挑话题；其余路由置 null，避免残留上一轮的旧值。
+        // 挑好之后放进 state，落库和 SwitchNode 共用这一个值，不再各算一遍。
+        String nextTopic = InterviewRouting.SWITCH.equals(routing)
+                ? tracker.suggestNextTopic() : null;
+        state.setNextTopic(nextTopic);
 
         Dialogue dialogue = new Dialogue();
         dialogue.setSeq(state.getQuestionIndex());
@@ -90,7 +100,6 @@ public class EvaluateNode implements Node<InterviewState> {
         state.getDialogues().add(dialogue);
         state.getScoreHistory().add(result.getOverall());
         state.pushHistory(new HistoryItem(question, answer, result.getOverall()), HISTORY_WINDOW);
-        tracker.markCovered(tracker.getCurrentTopic());
         tracker.setFollowUpCount(result.getNextAction() == NextAction.DEEPEN
                 ? tracker.getFollowUpCount() + 1 : 0);
 

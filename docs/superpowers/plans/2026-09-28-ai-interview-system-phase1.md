@@ -4444,6 +4444,7 @@ git commit -m "feat(interview): start / question / wait_answer 三个节点"
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/flow/InterviewRouting.java` ← 原计划放在 Task 20，见下方说明
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/EvalResultParser.java`
 - Create: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/node/EvaluateNode.java`
+- Modify: `src/main/java/com/ke/nhservice/aimianshi/biz/interview/InterviewState.java` ← 加 `nextTopic` 字段
 
 > **★ 任务拆分修正（执行时发现）**：`EvaluateNode` 要 import `InterviewRouting`，
 > 但原计划把它排在 Task 20——这样 Task 18 单独编译必然失败，Task 18 的提交点就是破的。
@@ -4581,6 +4582,32 @@ public final class EvalResultParser {
 }
 ```
 
+- [ ] **Step 2.5: 给 `InterviewState` 加 `nextTopic` 字段**
+
+在 `nextActionHint` 后面加：
+
+```java
+    /**
+     * 本题路由为 switch 时，接下来要聊的话题（由 EvaluateNode 挑好）。
+     * SwitchNode 只负责把它落到 currentTopic 上，不重新挑一次——
+     * 否则「落库的 next_topic」和「实际聊的话题」会各算各的，迟早对不上。
+     * 非 switch 路由时显式置 null，避免残留上一轮的旧值。
+     */
+    private String nextTopic;
+
+    public String getNextTopic() { return nextTopic; }
+
+    public void setNextTopic(String nextTopic) { this.nextTopic = nextTopic; }
+```
+
+> **★ 为什么不能靠「同一个纯函数调两次」**
+> 最初的写法是 EvaluateNode 调一次 `suggestNextTopic()` 落库、SwitchNode 再调一次来切换。
+> 但 `suggestNextTopic()` 返回的是「第一个**尚未**标记覆盖」的话题，而
+> `markCovered(当前话题)` 原本排在挑话题**之后**——于是第一次挑出来的还是刚聊完的当前话题，
+> 等 SwitchNode 再挑时它已被标记，挑到的是另一个。
+> 实测：落库 `next_topic=JVM 内存模型`，实际聊的是 `JVM 垃圾回收`，**每轮都差一个话题**。
+> 改成「算一次、两边共用」后彻底消失。
+
 - [ ] **Step 3: 写 `EvaluateNode.java`**
 
 ```java
@@ -4615,6 +4642,7 @@ import java.util.Map;
  * 2. 话题追踪（覆盖度、连续追问计数、必要时强制换话题）
  * 3. 落库 t_interview_dialogue（含图的分支决策）
  * 4. 清掉已消费的 answer，把本题推入滑动窗口
+ * 5. switch 路由下挑好下一个话题写进 state.nextTopic，交给 SwitchNode 执行
  *
  * 关于落库的 next_action：用的是 InterviewRouting.decide() —— 和紧接着执行的分支
  * 判断是同一个纯函数。此时 state 还没被分支节点改动，所以算出来的结果和分支
@@ -4656,7 +4684,16 @@ public class EvaluateNode implements Node<InterviewState> {
         String routing = InterviewRouting.decide(state);
         state.setLastRouting(routing);
 
-        String nextTopic = "switch".equals(routing) ? tracker.suggestNextTopic() : null;
+        // ★ 顺序要紧：先把刚答完的这题标记成已覆盖，再挑下一个话题。
+        // 反过来的话 suggestNextTopic() 会把当前话题又挑出来（它此刻还没被标记），
+        // 于是落库的 next_topic 是旧话题、而 SwitchNode 稍后挑到的是新话题，两者对不上。
+        tracker.markCovered(tracker.getCurrentTopic());
+
+        // 只在 switch 路由下挑话题；其余路由置 null，避免残留上一轮的旧值。
+        // 挑好之后放进 state，落库和 SwitchNode 共用这一个值，不再各算一遍。
+        String nextTopic = InterviewRouting.SWITCH.equals(routing)
+                ? tracker.suggestNextTopic() : null;
+        state.setNextTopic(nextTopic);
 
         Dialogue dialogue = new Dialogue();
         dialogue.setSeq(state.getQuestionIndex());
@@ -4676,7 +4713,6 @@ public class EvaluateNode implements Node<InterviewState> {
         state.getDialogues().add(dialogue);
         state.getScoreHistory().add(result.getOverall());
         state.pushHistory(new HistoryItem(question, answer, result.getOverall()), HISTORY_WINDOW);
-        tracker.markCovered(tracker.getCurrentTopic());
         tracker.setFollowUpCount(result.getNextAction() == NextAction.DEEPEN
                 ? tracker.getFollowUpCount() + 1 : 0);
 
@@ -5047,9 +5083,10 @@ public class InterviewGraphFactory {
         graph.addNode(NODE_CONTINUE, new SetHintNode(state -> prompts.load("hint_continue"), 0));
         graph.addNode(NODE_LOWER, new SetHintNode(state -> prompts.load("hint_lower"), -1));
         graph.addNode(NODE_SWITCH, new SetHintNode(state -> {
-            // 换话题的动作在这里做：TopicTracker 选出没聊过的话题并设为当前话题，
-            // 出题节点下一轮就会围绕它提问
-            String topic = state.getTopicTracker().suggestNextTopic();
+            // 换话题的动作在这里做，但话题是 EvaluateNode 已经挑好、写进 state.nextTopic 的。
+            // 这里只负责落到 currentTopic 上，★ 不要重新 suggestNextTopic() —— 那会算出
+            // 和落库的 next_topic 不同的值，复盘时看到的话题就对不上了。
+            String topic = state.getNextTopic();
             state.getTopicTracker().setCurrentTopic(topic);
             return prompts.render("hint_switch", Map.of("topic", topic == null ? "" : topic));
         }, 0));
