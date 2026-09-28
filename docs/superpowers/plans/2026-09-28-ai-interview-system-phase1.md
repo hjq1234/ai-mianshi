@@ -5258,11 +5258,34 @@ public class TraceRecorder implements GraphListener<InterviewState> {
 }
 ```
 
-- [ ] **Step 2: 编译并提交**
+- [ ] **Step 2: 编译、跑图验轨迹、提交**
+
+轨迹只有在真实多轮执行下才看得出对不对，所以直接把它挂到 Task 20 那套端到端里
+（`build(ctx, new TraceRecorder(dao))`），一次跑完顺便断言：
+
+| 断言 | 说明 |
+|---|---|
+| seq 从 1 起严格递增 | `insertTrace` 的 `MAX(seq)+1` 在多行插入下不重号 |
+| 有 `wait_answer` 的 `suspend/suspend` 行 | 挂起被记下来了 |
+| 分支行 `to_node` == 实际走的路由 | 依次是 deepen / lower / switch / end_loop |
+| 分支行 `from_node` == evaluate | 决策确实发生在 evaluate |
+| `round` 覆盖 1~4 | 题号取得对 |
+
+★ **逐节点核对执行次数**（比总数更有信息量，实测）：
+
+```
+start=1  question=4  wait_answer=8  evaluate=4
+deepen=1 lower=1 switch=1 continue=0  end_loop=2   → 合计 22 行
+```
+
+其中两个数字容易想错，值得记一笔：
+- `wait_answer` 是 **8** 而不是 4——每轮「挂起一次 + 恢复一次」都会执行它
+- `end_loop` 是 **2**——正常收尾一次，后面从 end_loop 重跑又执行了一次
 
 ```bash
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
 ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
-git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/trace/
+git add src/main/java/com/ke/nhservice/aimianshi/biz/interview/trace/TraceRecorder.java
 git commit -m "feat(interview): GraphListener 落库实现（节点轨迹 + 分支决策）"
 ```
 
