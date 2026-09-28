@@ -126,13 +126,17 @@ function renderMarkdown(text) {
     .replace(/$/, '</p>');
 }
 
-/** 顶部导航渲染成统一的一段 HTML，省得六个页面各写一遍 */
+/**
+ * 顶部导航渲染成统一的一段 HTML，省得六个页面各写一遍。
+ * 页面里这样用：`<div v-html="topbar"></div>`，data 里 `topbar: topbarHtml('index.html')`。
+ *
+ * 面试进行页（interview.html）不用这个——它顶栏要显示题号和「结束面试」，那是活的。
+ */
 function topbarHtml(active) {
   const items = [
-    ['index.html', '首页'],
-    ['interview.html', '开始面试'],
-    ['resume.html', '简历'],
-    ['records.html', '面试记录']
+    ['index.html', '开始面试'],
+    ['history.html', '面试记录'],
+    ['resume.html', '我的简历']
   ];
   const links = items.map(([href, label]) =>
     `<a href="${href}" class="${href === active ? 'active' : ''}">${label}</a>`).join('');

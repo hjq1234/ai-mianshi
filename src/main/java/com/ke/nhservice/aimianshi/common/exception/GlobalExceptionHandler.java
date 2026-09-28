@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -35,6 +36,20 @@ public class GlobalExceptionHandler {
         log.debug("找不到资源: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResponse.fail(404, "资源不存在"));
+    }
+
+    /**
+     * 上传超过 10MB。这条不是「未预期的异常」，是我们明确设过的限制
+     * （`spring.servlet.multipart.max-file-size`），要给用户一句能看懂的话。
+     *
+     * 不接这条的话会掉进兜底分支，用户看到的是
+     * 「服务器内部错误：Maximum upload size exceeded」，外加日志里一整条 ERROR 堆栈。
+     * 而简历页上写着「不超过 10MB」——用户照着做的话本不该看到报错。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge(MaxUploadSizeExceededException e) {
+        log.warn("上传文件超过大小限制: {}", e.getMessage());
+        return ResponseEntity.ok(ApiResponse.fail(400, "文件超过 10MB 上限，请压缩后再上传"));
     }
 
     @ExceptionHandler(Exception.class)

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>开始面试 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div v-html="topbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h2>面试配置</h2>
+      <p class="sub">AI 会按这个配置出题，答题过程中会根据你的表现动态调整难度和话题。</p>
+
+      <div class="field">
+        <label>简历（决定出题的个性化程度）</label>
+        <select v-model="form.resumeId">
+          <option :value="null">不使用简历</option>
+          <option v-for="r in resumes" :key="r.id" :value="r.id">
+            {{ r.filename }}{{ r.isDefault ? '（默认）' : '' }}
+          </option>
+        </select>
+        <p class="muted mt8" v-if="resumes.length === 0">
+          还没有简历，<a href="resume.html">先上传一份</a>能让问题更贴合你的经历。
+        </p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>岗位</label>
+          <input v-model.trim="form.position" placeholder="例如：Java 后端开发">
+        </div>
+        <div class="field">
+          <label>目标公司（可留空）</label>
+          <input v-model.trim="form.company" placeholder="例如：某互联网公司">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>技术方向（决定话题池）</label>
+          <select v-model="form.domain">
+            <option v-for="d in domains" :key="d" :value="d">{{ d }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>初始难度</label>
+          <select v-model="form.difficulty">
+            <option v-for="d in difficulties" :key="d" :value="d">{{ d }}</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button :disabled="loading || !form.position" @click="start">
+          <span v-if="loading" class="spinner"></span>
+          {{ loading ? 'AI 面试官正在准备第一个问题…' : '开始面试' }}
+        </button>
+      </div>
+      <p class="muted mt8" v-if="loading">
+        AI 服务繁忙时会自动重试，最长约 1.5 分钟，请勿刷新页面。
+      </p>
+    </div>
+
+    <div class="card" v-if="inProgress.length">
+      <h2>未完成的面试</h2>
+      <p class="sub">关掉页面不会结束面试，这里可以随时接着答。</p>
+      <table>
+        <thead>
+          <tr><th>岗位</th><th>方向</th><th>难度</th><th>已答</th><th>开始时间</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in inProgress" :key="r.id">
+            <td>{{ r.position || '-' }}</td>
+            <td>{{ r.domain || '-' }}</td>
+            <td>{{ r.difficulty || '-' }}</td>
+            <td>{{ r.dialogueCount }} 题</td>
+            <td class="muted">{{ fmtTime(r.createdAt) }}</td>
+            <td class="right"><button class="small" @click="go(r.id)">继续面试</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        topbar: topbarHtml('index.html'),
+        resumes: [],
+        inProgress: [],
+        // 这三个和后端 application.yml 的 topic-pools 对应；填了别的会落到「默认」话题池
+        domains: ['Java', 'Go', 'Python'],
+        difficulties: DIFFICULTY_OPTIONS,
+        loading: false,
+        form: {
+          resumeId: null,
+          position: 'Java 后端开发',
+          company: '',
+          domain: 'Java',
+          difficulty: '中等'
+        }
+      };
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+      fillNickname();
+      try {
+        this.resumes = await api('/api/resume/list');
+        // 有默认简历就预选上，省得每次手动挑
+        const def = this.resumes.find(r => r.isDefault);
+        if (def) this.form.resumeId = def.id;
+
+        // 拉最近一页，挑出没结束的——那才是「继续面试」要接的
+        const records = await api('/api/interview/list?page=1&size=50');
+        this.inProgress = records.filter(r => r.status === 'in_progress');
+      } catch (e) {
+        toast(e.message, true);
+      }
+    },
+    methods: {
+      fmtTime,
+      go(id) { location.href = 'interview.html?id=' + id; },
+      async start() {
+        if (this.loading) return;
+        this.loading = true;
+        try {
+          const data = await api('/api/interview/start', { method: 'POST', body: this.form });
+          location.href = 'interview.html?id=' + data.recordId;
+        } catch (e) {
+          toast(e.message, true);
+          // 成功时故意不复位：已经要跳走了，留着禁用态防止重复点出一场新的面试
+          this.loading = false;
+        }
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>

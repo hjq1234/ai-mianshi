@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>我的简历 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div v-html="topbar"></div>
+
+  <div class="container">
+    <div class="card">
+      <h2>上传简历</h2>
+      <p class="sub">支持 PDF，不超过 10MB。上传后会立刻抽取文字并存下来，
+        面试出题时作为背景资料。扫描件（图片型 PDF）抽不出文字。</p>
+
+      <div class="field">
+        <input type="file" accept="application/pdf,.pdf" ref="fileInput" @change="onPick">
+      </div>
+
+      <button :disabled="uploading || !picked" @click="upload">
+        <span v-if="uploading" class="spinner"></span>
+        {{ uploading ? '上传解析中…' : '上传' }}
+      </button>
+    </div>
+
+    <div class="card">
+      <h2>已上传的简历</h2>
+      <p class="sub">面试配置里选中的是「默认」那一份。</p>
+
+      <div v-if="list.length === 0" class="empty">还没有简历</div>
+      <table v-else>
+        <thead>
+          <tr><th>文件名</th><th>内容摘要</th><th>状态</th><th>上传时间</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in list" :key="r.id">
+            <td>{{ r.filename }}</td>
+            <td class="muted" style="max-width:340px">{{ r.preview || '（未抽到文字）' }}</td>
+            <td>
+              <span v-if="r.isDefault" class="tag primary">默认</span>
+              <span v-else class="muted">-</span>
+            </td>
+            <td class="muted">{{ fmtTime(r.createdAt) }}</td>
+            <td class="right">
+              <button v-if="!r.isDefault" class="small ghost" @click="setDefault(r.id)">设为默认</button>
+              <button class="small danger" @click="remove(r.id)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        topbar: topbarHtml('resume.html'),
+        list: [],
+        picked: null,
+        uploading: false
+      };
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+      fillNickname();
+      try {
+        await this.reload();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    },
+    methods: {
+      fmtTime,
+      async reload() {
+        this.list = await api('/api/resume/list');
+      },
+      onPick(event) {
+        this.picked = event.target.files[0] || null;
+      },
+      async upload() {
+        if (!this.picked) return;
+        this.uploading = true;
+        try {
+          const form = new FormData();
+          form.append('file', this.picked);
+          await api('/api/resume/upload', { method: 'POST', body: form });
+          toast('上传成功');
+          this.picked = null;
+          // 清掉 input 的值，否则选同一个文件不会再触发 change
+          this.$refs.fileInput.value = '';
+          await this.reload();
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.uploading = false;
+        }
+      },
+      async setDefault(id) {
+        try {
+          await api('/api/resume/' + id + '/default', { method: 'POST' });
+          await this.reload();
+        } catch (e) {
+          toast(e.message, true);
+        }
+      },
+      async remove(id) {
+        if (!confirm('确定删除这份简历？')) return;
+        try {
+          await api('/api/resume/' + id, { method: 'DELETE' });
+          toast('已删除');
+          await this.reload();
+        } catch (e) {
+          toast(e.message, true);
+        }
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>
