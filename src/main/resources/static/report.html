@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>面试复盘 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div v-html="topbar"></div>
+
+  <div class="container-wide">
+    <div v-if="loading" class="card center muted">正在载入复盘数据…</div>
+
+    <div v-else-if="!detail" class="card center">
+      <p class="muted">这份复盘没能载入。</p>
+      <a href="history.html">回到面试记录</a>
+    </div>
+
+    <template v-else>
+      <!-- 概览 -->
+      <div class="card">
+        <div class="row" style="align-items:baseline">
+          <h2 style="margin:0">
+            {{ detail.position || '技术面试' }}
+            <span class="muted" v-if="detail.company">· {{ detail.company }}</span>
+          </h2>
+          <span class="tag">{{ detail.domain }}</span>
+          <span class="tag">{{ detail.difficulty }}</span>
+          <span class="muted">{{ fmtTime(detail.createdAt) }}</span>
+          <span style="flex:1"></span>
+          <span>
+            <span class="score" :class="scoreClass(detail.totalScore)">
+              {{ fmtScore(detail.totalScore) }}
+            </span>
+            <span class="muted"> / 10</span>
+          </span>
+        </div>
+        <p class="muted mt8">
+          共 {{ detail.dialogues.length }} 题 ·
+          覆盖 {{ coveredTopicCount }} 个话题 ·
+          {{ detail.status === 'finished' ? '已结束' : '进行中' }}
+        </p>
+        <!-- 提前结束或引擎跑挂时，这里说明原因 -->
+        <div v-if="detail.error" class="feedback mt16"
+             style="background:#fdecec;border-color:#f5c2c2">
+          {{ detail.error }}
+        </div>
+      </div>
+
+      <!-- 决策链：图是怎么走的 -->
+      <div class="card">
+        <h2>图的分支决策链</h2>
+        <p class="sub">
+          每一轮评分后，图根据得分和话题覆盖度决定下一步。这张表就是那次决策的记录。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>题号</th><th>话题</th><th>难度</th><th>得分</th>
+              <th>图的分支</th><th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="d in detail.dialogues" :key="d.seq">
+              <td>{{ d.seq }}</td>
+              <td>{{ d.topic || '-' }}</td>
+              <td>{{ d.difficulty || '-' }}</td>
+              <td>
+                <span class="score" :class="scoreClass(d.score)">{{ fmtScore(d.score) }}</span>
+              </td>
+              <td>
+                <span class="tag" :class="routingTagClass(d.nextAction)">
+                  → {{ NEXT_ACTION_LABELS[d.nextAction] || d.nextAction || '-' }}
+                </span>
+              </td>
+              <td class="muted">
+                {{ d.comment }}
+                <span v-if="d.nextTopic">（换到：{{ d.nextTopic }}）</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 逐题详情 -->
+      <div class="card">
+        <h2>逐题详情</h2>
+        <div v-for="d in detail.dialogues" :key="d.seq"
+             style="border-bottom:1px solid var(--border);padding:14px 0">
+          <div class="row" style="align-items:baseline">
+            <strong>第 {{ d.seq }} 题</strong>
+            <span class="tag">{{ d.topic || '综合' }}</span>
+            <span class="tag">{{ d.difficulty || '-' }}</span>
+            <span style="flex:1"></span>
+            <span class="score" :class="scoreClass(d.score)">{{ fmtScore(d.score) }}</span>
+          </div>
+
+          <p class="mt8"><span class="muted">问：</span>{{ d.question }}</p>
+          <p class="mt8" style="white-space:pre-wrap">
+            <span class="muted">答：</span>{{ d.answer || '（未作答）' }}
+          </p>
+          <p class="mt8" v-if="d.comment"><span class="muted">评语：</span>{{ d.comment }}</p>
+
+          <div class="dim-grid mt8" v-if="d.dimensions">
+            <div class="dim-item" v-for="(v, k) in d.dimensions" :key="k">
+              <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
+              <span class="v">{{ fmtScore(v) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 综合报告 -->
+      <div class="card">
+        <h2>AI 综合报告</h2>
+        <div class="report" v-if="detail.report" v-html="renderMarkdown(detail.report)"></div>
+        <div v-else class="muted">这场面试还没结束，结束之后才会有综合报告。</div>
+      </div>
+
+      <!-- 图执行轨迹（默认折叠，10 题能有一两百条） -->
+      <div class="card">
+        <h2 style="cursor:pointer" @click="showTrace = !showTrace">
+          图执行轨迹（{{ detail.traces.length }} 条）{{ showTrace ? '▾' : '▸' }}
+        </h2>
+        <p class="sub">
+          引擎每进出一个节点、每做一次分支决策都会记一条。二期用它画路径可视化图。
+        </p>
+        <table v-if="showTrace">
+          <thead>
+            <tr><th>#</th><th>轮次</th><th>节点</th><th>类型</th><th>去向</th><th>耗时</th><th>状态</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in detail.traces" :key="t.seq">
+              <td>{{ t.seq }}</td>
+              <td>{{ t.round }}</td>
+              <td>{{ t.nodeName }}</td>
+              <td><span class="tag">{{ t.nodeType }}</span></td>
+              <td>{{ t.toNode || '-' }}</td>
+              <td class="muted">{{ t.costMs }} ms</td>
+              <td>
+                <span v-if="t.status === 'error'" class="tag" style="color:var(--danger)">error</span>
+                <span v-else-if="t.status === 'suspend'" class="tag warning">挂起</span>
+                <span v-else class="muted">ok</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        topbar: topbarHtml('history.html'),
+        detail: null,
+        loading: true,
+        showTrace: false,
+        DIMENSION_LABELS,
+        NEXT_ACTION_LABELS
+      };
+    },
+    computed: {
+      coveredTopicCount() {
+        if (!this.detail) return 0;
+        return new Set(this.detail.dialogues.map(d => d.topic).filter(Boolean)).size;
+      }
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+
+      const id = new URLSearchParams(location.search).get('id');
+      if (!id) {
+        location.replace('history.html');
+        return;
+      }
+
+      fillNickname();
+      try {
+        // 复盘只用这一个接口：逐题评分 + 决策链 + 轨迹 + 报告都在里面
+        this.detail = await api('/api/interview/' + id + '/detail');
+      } catch (e) {
+        toast(e.message, true);
+      } finally {
+        this.loading = false;
+      }
+    },
+    methods: {
+      fmtTime,
+      fmtScore,
+      scoreClass,
+      renderMarkdown,
+      routingTagClass(action) {
+        if (action === 'deepen') return 'success';
+        if (action === 'lower') return 'warning';
+        if (action === 'end') return 'primary';
+        return '';
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>
