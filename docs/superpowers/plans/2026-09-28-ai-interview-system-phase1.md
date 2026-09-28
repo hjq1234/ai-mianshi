@@ -4148,7 +4148,7 @@ public class InterviewDao {
                 """,
                 recordId, d.getSeq(), d.getTopic(), d.getDifficulty(), d.getQuestion(),
                 d.getAnswer(), d.getScore(),
-                com.ke.nhservice.aimianshi.common.util.JsonUtil.toJson(d.getDimensions()),
+                JsonUtil.toJson(new EvalJson(d.getDimensions(), d.getComment())),
                 d.getNextAction(), d.getNextTopic(), System.currentTimeMillis());
     }
 
@@ -4168,14 +4168,28 @@ public class InterviewDao {
             d.setNextTopic(rs.getString("next_topic"));
             String evalJson = rs.getString("eval_json");
             if (evalJson != null && !evalJson.isBlank()) {
-                @SuppressWarnings("unchecked")
-                java.util.Map<String, Double> dims =
-                        com.ke.nhservice.aimianshi.common.util.JsonUtil.fromJson(
-                                evalJson, java.util.Map.class);
-                d.setDimensions(dims);
+                EvalJson ej = JsonUtil.fromJson(evalJson, EvalJson.class);
+                if (ej.dimensions() != null) {
+                    d.setDimensions(ej.dimensions());
+                }
+                d.setComment(ej.comment());
             }
             return d;
         }, recordId);
+    }
+
+    /**
+     * eval_json 的载荷：五维明细 + 评语。
+     *
+     * 评语和五维明细都是同一题的 LLM 评分产物，放一个 JSON 里一起存取，省一个列。
+     *
+     * ★ 早先这里只存了 dimensions，评语被静默丢掉——于是复盘页永远看不到评语，
+     * 而 EndNode 生成报告用的是内存对象、报告里却又带着评语，两边不一致。
+     * schema 对 eval_json 的注释本来就写着「五维明细 + 评语」，是代码没做到。
+     * 这个 bug 是靠端到端跑图（GraphE2ECheck）才暴露出来的，编译和单元级断言都发现不了。
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EvalJson(Map<String, Double> dimensions, String comment) {
     }
 
     // ────────────────────────── 图执行轨迹 ──────────────────────────
@@ -4216,6 +4230,14 @@ public class InterviewDao {
 ```
 
 - [ ] **Step 4: 编译并提交**
+
+> **★ 这一版 DAO 有个只有「跑一遍」才能发现的坑**（写计划时没看出来，端到端跑图才暴露）：
+> 最初 `eval_json` 只存了 `dimensions`，`comment` 既没写进库也没读回来——**评语被静默丢弃**。
+> 表现是复盘页永远没有评语，而 `EndNode` 生成的报告却带着评语（它读的是内存对象），两边不一致。
+> 编译能过，逐条 SQL 的断言也都过，只有把整张图跑穿、再从库里读回来对比才看得见。
+> 修法见上面 `EvalJson` 记录：**不新增列**（`CREATE TABLE IF NOT EXISTS` 对已存在的库不会补列，
+> 项目又没有迁移机制，加列会让老库直接插不进去），改为让代码去满足 schema 里已经写明的
+> `eval_json -- 五维明细 + 评语`。
 
 ```bash
 ./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
@@ -5113,7 +5135,38 @@ public class InterviewGraphFactory {
 }
 ```
 
-- [ ] **Step 3: 编译并提交**
+- [ ] **Step 3: ★ 端到端跑穿整张图（本项目性价比最高的一次验证）**
+
+图能 `compile()` 只说明语法对。真正要验的是「挂起 → 恢复 → 评分 → 分支 → 收尾」这条链路，
+而这**不需要 LLM、不需要 HTTP、不需要启动 Spring**——`CompiledGraph.run()` 是纯本地调用。
+
+准备四样东西（全部放临时目录，**不进仓库**）：
+
+| 依赖 | 怎么造 |
+|---|---|
+| `PromptLoader` | `new PromptLoader()`，读的是 `src/main/resources/prompts/` 真文件 |
+| `InterviewProperties` | `new InterviewProperties()` + setter，`maxQuestions` 设 3~4 好跑完 |
+| `InterviewDao` | 真 SQLite 临时库 + 仓库里那份 `schema.sql`（**别另写一份建表语句**） |
+| `LlmClient` | 实现接口的假客户端，按 prompt 内容分派：含「做出评估」→ 评分 JSON、含「综合评估报告」→ 报告、其余 → 出题 |
+
+跑法：`new Execution<>(state, cursor)` → `graph.run(exec)` → 看 `RunResult.status()`。
+挂起时把 answer 塞进 state、带同一个 execution 再 `run` 一次，就是真实的多轮问答。
+
+至少断言这些（实测 37/37 通过）：
+
+- 第 1 轮 `SUSPENDED@wait_answer`，且已出好第 1 题
+- DEEPEN → 难度升档且挂起在第 2 题；LOWER → 降档；SWITCH → 换话题且不动难度
+- **最后一题答完必须收尾，即使 LLM 说 DEEPEN**（不能被追问拖住）
+- 落库：4 条问答、seq 连续、每题 `next_action` 正确、第 4 题是 `end`（`end_loop` 映射来的）
+- **★ 交叉断言：第 N 题落库的 `next_topic` == 第 N+1 题实际使用的话题**
+- 每题落库的难度 == 出题时候选人实际面对的难度（分支节点在 evaluate 之后才调难度）
+- `state_json` 序列化往返后继续跑照常收尾；从 `end_loop` 重跑不重复生成报告
+- 出题失败（LLM 返回空白）→ 不抛异常、`shouldStop`、记录仍置 finished 并落降级报告
+
+★ 这一步抓到过一个编译期和单条 SQL 断言都看不见的 bug：`eval_json` 把评语静默丢了
+（详见 Task 16 的说明）。**凡是「写进去再读回来」的数据，都要在端到端里对一遍。**
+
+- [ ] **Step 4: 编译并提交**
 
 ```bash
 export JAVA_HOME="/c/Program Files/Java/jdk-21"

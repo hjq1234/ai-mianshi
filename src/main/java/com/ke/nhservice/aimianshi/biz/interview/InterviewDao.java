@@ -1,5 +1,6 @@
 package com.ke.nhservice.aimianshi.biz.interview;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.ke.nhservice.aimianshi.common.util.JsonUtil;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -131,7 +132,7 @@ public class InterviewDao {
                 """,
                 recordId, d.getSeq(), d.getTopic(), d.getDifficulty(), d.getQuestion(),
                 d.getAnswer(), d.getScore(),
-                JsonUtil.toJson(d.getDimensions()),
+                JsonUtil.toJson(new EvalJson(d.getDimensions(), d.getComment())),
                 d.getNextAction(), d.getNextTopic(), System.currentTimeMillis());
     }
 
@@ -151,12 +152,27 @@ public class InterviewDao {
             d.setNextTopic(rs.getString("next_topic"));
             String evalJson = rs.getString("eval_json");
             if (evalJson != null && !evalJson.isBlank()) {
-                @SuppressWarnings("unchecked")
-                Map<String, Double> dims = JsonUtil.fromJson(evalJson, Map.class);
-                d.setDimensions(dims);
+                EvalJson ej = JsonUtil.fromJson(evalJson, EvalJson.class);
+                if (ej.dimensions() != null) {
+                    d.setDimensions(ej.dimensions());
+                }
+                d.setComment(ej.comment());
             }
             return d;
         }, recordId);
+    }
+
+    /**
+     * eval_json 的载荷：五维明细 + 评语。
+     *
+     * 评语和五维明细都是同一题的 LLM 评分产物，放一个 JSON 里一起存取，
+     * 省一个列。★ 早先这里只存了 dimensions，评语被静默丢掉——
+     * 于是复盘页永远看不到评语，而 EndNode 生成报告用的是内存对象、报告里却有，
+     * 两边不一致。schema 对 eval_json 的注释本来就写着「五维明细 + 评语」，
+     * 是代码没做到。
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EvalJson(Map<String, Double> dimensions, String comment) {
     }
 
     // ────────────────────────── 图执行轨迹 ──────────────────────────
