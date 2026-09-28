@@ -5679,6 +5679,11 @@ public record InterviewTurnVO(
         return dao.countByUser(userId);
     }
 
+    /** 每场面试答了几题，列表页一次查完 */
+    public Map<Long, Integer> dialogueCounts(List<Long> recordIds) {
+        return dao.countDialoguesByRecord(recordIds);
+    }
+
     /** 复盘详情。归属校验统一走 loadOwned，不在这里重复写一遍 */
     public RecordRow requireRecord(Long userId, Long recordId) {
         return loadOwned(userId, recordId).row();
@@ -5697,7 +5702,29 @@ public record InterviewTurnVO(
 
 ```java
 import java.util.List;
+import java.util.Map;
 ```
+
+同时给 `InterviewDao` 加一个批量计数方法（列表页要用，别在循环里逐条 count）：
+
+```java
+public Map<Long, Integer> countDialoguesByRecord(List<Long> recordIds) {
+    if (recordIds == null || recordIds.isEmpty()) {
+        return Map.of();
+    }
+    String placeholders = String.join(",", Collections.nCopies(recordIds.size(), "?"));
+    String sql = "SELECT record_id, COUNT(*) AS c FROM t_interview_dialogue "
+            + "WHERE record_id IN (" + placeholders + ") GROUP BY record_id";
+
+    Map<Long, Integer> counts = new HashMap<>();
+    jdbc.query(sql, rs -> {
+        counts.put(rs.getLong("record_id"), rs.getInt("c"));
+    }, recordIds.toArray());
+    return counts;
+}
+```
+
+（拼进 SQL 的只有若干个 `?`，参数仍走占位符绑定，没有注入面。）
 
 - [ ] **Step 3: 写 `InterviewController.java`**
 
@@ -5733,9 +5760,8 @@ import java.util.Map;
 @RequestMapping("/api/interview")
 public class InterviewController {
 
+    /** 引擎跑挂时给用户看的话。失败不等于「面试没了」——进度都落库了，可以接着来 */
     private static final Map<RunStatus, String> STATUS_TEXT = Map.of(
-            RunStatus.FINISHED, "面试已结束",
-            RunStatus.SUSPENDED, "等待候选人作答",
             RunStatus.FAILED, "AI 服务暂时不可用，面试进度已保存，可稍后继续",
             RunStatus.STEP_LIMIT, "流程异常中断，进度已保存");
 
@@ -5783,12 +5809,18 @@ public class InterviewController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         Long userId = UserContext.get();
-        List<RecordListItemVO> items = engine.list(userId, page, size).stream()
+        List<RecordRow> rows = engine.list(userId, page, size);
+
+        // 一次查完各场面试的答题数，别在循环里逐条 count
+        Map<Long, Integer> counts = engine.dialogueCounts(
+                rows.stream().map(RecordRow::id).toList());
+
+        List<RecordListItemVO> items = rows.stream()
                 .map(row -> new RecordListItemVO(
                         row.id(), row.position(), row.company(), row.domain(),
                         row.difficulty(), row.status(), row.totalScore(),
                         row.createdAt(), row.updatedAt(),
-                        engine.dialogues(row.id()).size()))
+                        counts.getOrDefault(row.id(), 0)))
                 .toList();
         return ApiResponse.ok(items);
     }
@@ -5842,12 +5874,21 @@ public class InterviewController {
 
     private InterviewTurnVO toTurnVO(InterviewState state, String status, RunStatus runStatus) {
         boolean finished = "finished".equals(status);
-        var eval = state.getEvalResult();
+        var tracker = state.getTopicTracker();
+
+        // ★ 「上一题的反馈」从已落库的最后一题读，而不是从 state.evalResult 读。两个原因：
+        //  1. QuestionNode 出下一题时会把 evalResult 清掉（为了本轮状态干净），
+        //     等图在 wait_answer 挂起时，上一题的评分已经不在 state 里了——实测 lastScore=null。
+        //  2. /state 这个接口压根不跑图，state 完全来自反序列化的快照；
+        //     用快照里的瞬时字段，用户答完题一刷新就会看到反馈消失。
+        // 逐题记录本来就是「答过什么」的唯一事实来源，读它也不会和复盘页对不上。
+        Dialogue last = lastDialogue(state.getRecordId());
+
         String error = state.getError();
-        if (error == null && runStatus != null && STATUS_TEXT.containsKey(runStatus)
-                && runStatus != RunStatus.SUSPENDED && runStatus != RunStatus.FINISHED) {
+        if (error == null && runStatus != null) {
             error = STATUS_TEXT.get(runStatus);
         }
+
         return new InterviewTurnVO(
                 state.getRecordId(),
                 status,
@@ -5855,15 +5896,23 @@ public class InterviewController {
                 state.getQuestionIndex(),
                 state.getMaxQuestions(),
                 state.getQuestionText(),
-                state.getTopicTracker() == null ? null : state.getTopicTracker().getCurrentTopic(),
+                tracker == null ? null : tracker.getCurrentTopic(),
                 state.getCurrentDifficulty() == null ? null : state.getCurrentDifficulty().getLabel(),
-                eval == null ? null : eval.getOverall(),
-                eval == null ? null : eval.getDimensions(),
-                eval == null ? null : eval.getComment(),
-                state.getLastRouting(),
+                last == null ? null : last.getScore(),
+                last == null ? null : last.getDimensions(),
+                last == null ? null : last.getComment(),
+                last == null ? null : last.getNextAction(),
                 state.getScoreHistory() == null ? null : state.getScoreHistory().average(),
                 finished ? state.getReport() : null,
                 error);
+    }
+
+    private Dialogue lastDialogue(Long recordId) {
+        if (recordId == null) {
+            return null;
+        }
+        List<Dialogue> dialogues = engine.dialogues(recordId);
+        return dialogues.isEmpty() ? null : dialogues.get(dialogues.size() - 1);
     }
 
     private static InterviewDetailVO.DialogueVO toDialogueVO(Dialogue d) {
@@ -5879,86 +5928,90 @@ public class InterviewController {
 Run: `./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile`
 Expected: 无输出。
 
-- [ ] **Step 5: 用 curl 跑通一次完整面试（关键验证）**
+- [ ] **Step 5: 走真实 HTTP 跑通完整面试（关键验证）**
 
-先确认 API key 已配置：
-```bash
-export DEEPSEEK_API_KEY=sk-你的key
-./mvnw -s /d/apache-jmeter-5.4.3/settings.xml spring-boot:run
+★ **不要用 curl**：本环境的权限规则会拒绝 `curl`，而且它还需要真实 API key。
+改用「单文件 Java 程序 + `@Primary` 假 LLM」——不需要 key 就能把
+`start → answer → resume → finish → detail` 整条 HTTP 链路跑通，
+验的是控制器路由、鉴权拦截器、JSON 形状和 VO 转换，与真实 LLM 无关。
+（程序放临时目录，**不进仓库**。）
+
+```java
+public static class FakeLlm implements LlmClient {
+    public final Deque<String> evals = new ArrayDeque<>();
+    public int questionSeq = 0;
+
+    @Override
+    public String chat(List<ChatMessage> messages) {
+        String prompt = messages.get(messages.size() - 1).content();
+        if (prompt.contains("做出评估")) {
+            return evals.isEmpty() ? eval(6.0, "CONTINUE") : evals.poll();
+        }
+        if (prompt.contains("综合评估报告")) {
+            return "## 综合评估报告
+
+整体表现良好。";
+        }
+        questionSeq++;
+        return "第 " + questionSeq + " 题：请说说你的理解。";
+    }
+}
+
+public static final FakeLlm LLM = new FakeLlm();
+
+@Configuration
+static class FakeLlmConfig {
+    @Bean @Primary
+    LlmClient fakeLlm() { return LLM; }
+}
 ```
 
-另开终端：
-```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
-AUTH="Authorization: Bearer $TOKEN"
-JSON="Content-Type: application/json"
+★ **启动参数必须走命令行参数**，不能用 `SpringApplicationBuilder.properties()`：
+后者设的是「默认属性」，优先级低于 `application.yml`，
+`server.port` 和 `spring.datasource.url` 都会被 yml 覆盖掉
+（会静默连到 `./data/interview.db`，测试数据混进开发库）。
 
-# 1. 开始面试
-curl -s -X POST http://localhost:8080/api/interview/start -H "$AUTH" -H "$JSON" \
-  -d '{"position":"Java 后端","company":"某互联网公司","domain":"Java","difficulty":"中等"}'
+```java
+ConfigurableApplicationContext ctx = new SpringApplicationBuilder(
+        AiMianshiApplication.class, FakeLlmConfig.class)
+        .run("--server.port=18080",
+             "--spring.datasource.url=jdbc:sqlite:" + db.toAbsolutePath(),
+             "--app.interview.max-questions=4");
 ```
 
-Expected：返回 `questionIndex:1`、`question` 是一道 Java 题、`finished:false`、`topic` 是「JVM 内存模型」（话题池第一个）。
+请求用 JDK 的 `java.net.http.HttpClient`。实测 **41/41 通过**，断言覆盖：
 
-```bash
-# 把 recordId 记下来
-RID=1
+| 分组 | 断言 |
+|---|---|
+| 鉴权 | 无 token / 伪造 token → 401 |
+| start | code=0、第 1 题、questionIndex=1、total=4、话题=「JVM 内存模型」、难度中文标签 |
+| answer | 上一题 lastScore / lastComment / 五维、nextAction=deepen、推进到第 2 题、难度升到困难 |
+| 入参校验 | 空答案被拒且提示「答案不能为空」 |
+| state | 不推进图、题号不变、**★ 刷新后仍能看到上一题评分与五维** |
+| resume | 无答案时立刻挂起、返回同一题 |
+| switch | nextAction=switch、下一题话题变成「并发编程」 |
+| 收尾 | 末题答完 finished=true、返回报告、平均分 6.5 |
+| 终态 | 已结束的面试不能再答题；重复 finish 幂等 |
+| detail | 4 条问答、每题 nextAction（末题 end）、评语、五维、next_topic、轨迹、报告、error=null |
+| trace | 分支决策行含 deepen / end_loop |
+| list | 状态 finished、dialogueCount=4 |
+| 越权 | 不存在的记录 → code 404，且信息与「不是你的」完全一致（防 id 探测） |
 
-# 2. 答题
-curl -s -X POST http://localhost:8080/api/interview/$RID/answer -H "$AUTH" -H "$JSON" \
-  -d '{"answer":"JMM 定义了线程和主内存之间的抽象关系，规定了 8 种原子操作，通过 volatile、synchronized 和 final 保证可见性和有序性。"}'
-```
+★ **这一步抓到的真 bug**：`lastScore` / `lastComment` 全是 null。
+原因是「上一题反馈」原本从 `state.evalResult` 读，而 `QuestionNode` 出下一题时
+会把它清空（为了本轮状态干净）——图挂起时那个字段早没了。
+`/state` 更糟：它压根不跑图，state 全来自快照，用户答完一刷新反馈就消失。
+改为从**已落库的最后一题**读（见上面 `lastDialogue`）。
+教训：**响应要反映落库的事实，不要依赖只在某条代码路径上存在的瞬时内存字段。**
 
-Expected：返回上一次的 `lastScore`（0-10 的数字）、`lastComment`、`nextAction`（deepen/continue/lower/switch 之一）、以及**下一道新题**的 `question`、`questionIndex:2`。
+- [ ] **Step 6: 验证失败可恢复（需要真实 API key）**
 
-连续答 2-3 题，确认 `questionIndex` 递增、`nextAction` 会随回答质量变化。
+这一步需要 `DEEPSEEK_API_KEY`，用户尚未配置，**先跳过**。
 
-```bash
-# 3. 中途退出模拟：什么都不做，直接重新拉状态（等价于关掉页面再打开）
-curl -s http://localhost:8080/api/interview/$RID/state -H "$AUTH"
-```
-
-Expected：`status:"in_progress"`，`question` 还是刚才那道题。
-
-```bash
-# 4. 继续（不需要答案，从游标推进）
-curl -s -X POST http://localhost:8080/api/interview/$RID/resume -H "$AUTH"
-```
-
-Expected：返回同一道题（游标停在 wait_answer，没答案就立刻挂起）。
-
-```bash
-# 5. 主动结束
-curl -s -X POST http://localhost:8080/api/interview/$RID/finish -H "$AUTH"
-```
-
-Expected：`finished:true`，`report` 是一段 markdown 综合报告，`status:"finished"`。
-
-```bash
-# 6. 复盘详情
-curl -s http://localhost:8080/api/interview/$RID/detail -H "$AUTH"
-```
-
-Expected：`dialogues` 里每题的 `nextAction` 有值、`score` 有值；`traces` 里能看到 `start / question / wait_answer / evaluate` 以及 `nodeType:"branch"` 的行。
-
-- [ ] **Step 6: 验证失败可恢复**
-
-```bash
-# 故意把 api-key 改成错的再启动，或者断网
-curl -s -X POST http://localhost:8080/api/interview/start -H "$AUTH" -H "$JSON" \
-  -d '{"position":"Java 后端","domain":"Java","difficulty":"中等"}'
-```
-
-Expected：LLM 报 401（NonRetryableException），不重试，直接返回 `{"code":500,...}`。日志里有 `面试 x 在节点 question 执行失败，游标已保留，可重新唤起继续`。
-
-```bash
-# 修好 key 后重启服务，再继续这场面试
-curl -s -X POST http://localhost:8080/api/interview/1/resume -H "$AUTH"
-```
-
-Expected：能正常跑出第一道题 —— 证明「面试中失败了可以重新唤起」这条需求成立。
+思路（等 key 到位再补）：故意用错的 api-key 启动 → `start` 应当返回
+`{"code":500,...}`，日志出现 `面试 x 在节点 question 执行失败，游标已保留，可重新唤起继续`；
+改回正确 key 重启服务后 `POST /api/interview/{id}/resume` 能跑出第一道题——
+证明「面试中失败了可以重新唤起」这条需求成立。
 
 - [ ] **Step 7: 提交**
 

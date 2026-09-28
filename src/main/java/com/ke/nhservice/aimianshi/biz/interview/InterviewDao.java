@@ -10,6 +10,8 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -134,6 +136,25 @@ public class InterviewDao {
                 d.getAnswer(), d.getScore(),
                 JsonUtil.toJson(new EvalJson(d.getDimensions(), d.getComment())),
                 d.getNextAction(), d.getNextTopic(), System.currentTimeMillis());
+    }
+
+    /**
+     * 批量统计每场面试答了几题。列表页一次查完，避免逐条 count 的 N+1。
+     * 拼进 SQL 的只有若干个 "?"，参数仍走占位符绑定，没有注入面。
+     */
+    public Map<Long, Integer> countDialoguesByRecord(List<Long> recordIds) {
+        if (recordIds == null || recordIds.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = String.join(",", Collections.nCopies(recordIds.size(), "?"));
+        String sql = "SELECT record_id, COUNT(*) AS c FROM t_interview_dialogue "
+                + "WHERE record_id IN (" + placeholders + ") GROUP BY record_id";
+
+        Map<Long, Integer> counts = new HashMap<>();
+        jdbc.query(sql, rs -> {
+            counts.put(rs.getLong("record_id"), rs.getInt("c"));
+        }, recordIds.toArray());
+        return counts;
     }
 
     public List<Dialogue> listDialogues(Long recordId) {

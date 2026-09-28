@@ -19,6 +19,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -129,6 +131,37 @@ public class InterviewEngine {
     /** 只读当前状态，不推进图 */
     public InterviewState loadState(Long userId, Long recordId) {
         return loadOwned(userId, recordId).state();
+    }
+
+    // ────────────────────────── 只读查询 ──────────────────────────
+
+    /** 面试记录列表（分页） */
+    public List<RecordRow> list(Long userId, int page, int size) {
+        int safeSize = Math.max(1, Math.min(100, size));
+        int offset = Math.max(0, (Math.max(1, page) - 1) * safeSize);
+        return dao.listByUser(userId, safeSize, offset);
+    }
+
+    public int count(Long userId) {
+        return dao.countByUser(userId);
+    }
+
+    /** 每场面试答了几题，列表页一次查完 */
+    public Map<Long, Integer> dialogueCounts(List<Long> recordIds) {
+        return dao.countDialoguesByRecord(recordIds);
+    }
+
+    /** 复盘详情。归属校验统一走 loadOwned，不在这里重复写一遍 */
+    public RecordRow requireRecord(Long userId, Long recordId) {
+        return loadOwned(userId, recordId).row();
+    }
+
+    public List<Dialogue> dialogues(Long recordId) {
+        return dao.listDialogues(recordId);
+    }
+
+    public List<TraceRow> traces(Long recordId) {
+        return dao.listTraces(recordId);
     }
 
     // ────────────────────────── 内部 ──────────────────────────
