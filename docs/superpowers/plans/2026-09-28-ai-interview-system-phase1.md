@@ -947,32 +947,43 @@ public class GraphSmokeTest {
         first.setState(new State("这是我的答案", 0));
         System.out.println("第二次 run: " + graph.run(first).status() + " cursor=" + first.getCursor());
 
-        // 再用一个「一直 Next」的环验证超步数保护
+        // 超步数保护：自环 + 一个独立的终点，保证永远到不了终点。
+        // ★ 别写成 startAt("x") + endAt("x")：那样首次进入 x 就是 terminal，
+        //   引擎执行完直接 FINISHED，根本进不了循环，等于没验证到 STEP_LIMIT。
         Graph<State> loop = new Graph<>();
         loop.addNode("x", (ctx, s) -> NodeResult.NEXT);
+        loop.addNode("fin", (ctx, s) -> NodeResult.NEXT);
         loop.startAt("x");
         loop.addEdge("x", "x");
-        loop.endAt("x");
+        loop.endAt("fin");
         Execution<State> e = new Execution<>(new State("", 0), null);
         System.out.println("死循环 run: " + loop.compile(5).run(e).status());
     }
 }
 ```
 
-Run:
+Run（**JAVA_HOME 必须设，`java` 必须用 JDK 的**：PATH 上那个是 Java 8，
+跑 Java 21 的 class 会 `UnsupportedClassVersionError`；`-Dstdout.encoding=UTF-8` 是为了中文不乱码）：
 ```bash
-./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q compile
-java -cp target/classes com.ke.nhservice.aimianshi.graph.GraphSmokeTest
+export JAVA_HOME="/c/Program Files/Java/jdk-21"
+./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -q compile
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp target/classes \
+    com.ke.nhservice.aimianshi.graph.GraphSmokeTest
 ```
-Expected 输出：
+Expected 输出（**注意顺序**：`[a]` 是第一次 run 打印的，必然在「第一次 run」那行之前）：
 ```
+  [a] steps=0
 第一次 run: SUSPENDED cursor=wait
-  [a] steps=0        ← 注意：第二次 run 从 wait 开始，不会再执行 a
   [b] 收到答案: 这是我的答案
 第二次 run: FINISHED cursor=b
 死循环 run: STEP_LIMIT
 ```
-关键在于第一次是 `SUSPENDED cursor=wait`、第二次是 `FINISHED` —— 这就是「关掉页面再回来能继续」的底层机制。
+
+关键在于两点：
+1. 第一次是 `SUSPENDED cursor=wait`、第二次是 `FINISHED`，且第二次**没有重跑 `[a]`**
+   —— 这就是「关掉页面再回来能继续」的底层机制：现场就是 `cursor` 一个字符串。
+2. 第四行必须是 `STEP_LIMIT`。若跑出 `FINISHED`，八成是把环的终点写成了 `x` 自己
+   （见上面代码里的 ★ 注释），而不是引擎有问题。
 
 - [ ] **Step 8: 删掉临时验证类并提交**
 
