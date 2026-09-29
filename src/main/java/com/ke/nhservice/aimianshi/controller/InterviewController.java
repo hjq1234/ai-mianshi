@@ -168,7 +168,12 @@ public class InterviewController {
                 last == null ? null : last.getNextAction(),
                 state.getScoreHistory() == null ? null : state.getScoreHistory().average(),
                 finished ? state.getReport() : null,
-                error);
+                error,
+                last == null ? null : last.getSeq(),
+                last == null ? null : last.getTopic(),
+                last == null ? null : last.getDifficulty(),
+                last == null ? null : last.getQuestion(),
+                last == null ? null : last.getAnswer());
     }
 
     private Dialogue lastDialogue(Long recordId) {

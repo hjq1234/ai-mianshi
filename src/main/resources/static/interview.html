@@ -34,23 +34,34 @@
     <template v-else-if="turn">
       <div class="card">
         <div class="chat">
-          <!-- 上一题的反馈：评分 + 走的分支 + 五维明细 -->
-          <div class="feedback" v-if="turn.lastScore != null">
-            <div class="head">
+          <!-- 上一轮回顾：默认折叠。
+               原来这里是一块评分 + 一个孤零零的「你的回答」气泡，位置在当前题目之下，
+               新题一出来就读成「新题已经被答过了」。现在整轮（题目 + 回答 + 评分 + 五维）
+               收进一个折叠块，默认收起，要看点一下 -->
+          <details class="feedback prior" v-if="showPrior">
+            <summary>
+              上一轮回顾 · 第 {{ turn.lastSeq }} 题 · {{ turn.lastTopic || '综合' }}
               <span class="score" :class="scoreClass(turn.lastScore)">
                 {{ fmtScore(turn.lastScore) }}
               </span>
               <span class="tag">{{ NEXT_ACTION_LABELS[turn.nextAction] || turn.nextAction }}</span>
-              <span class="muted" v-if="turn.lastComment">评语</span>
-            </div>
-            <div v-if="turn.lastComment">{{ turn.lastComment }}</div>
-            <div class="dim-grid mt8" v-if="turn.lastDimensions">
-              <div class="dim-item" v-for="(v, k) in turn.lastDimensions" :key="k">
-                <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
-                <span class="v">{{ fmtScore(v) }}</span>
+            </summary>
+            <div class="prior-body">
+              <p class="mt8"><span class="muted">问：</span>{{ turn.lastQuestion }}</p>
+              <p class="mt8" style="white-space:pre-wrap">
+                <span class="muted">答：</span>{{ turn.lastAnswer || '（未作答）' }}
+              </p>
+              <p class="mt8" v-if="turn.lastComment">
+                <span class="muted">评语：</span>{{ turn.lastComment }}
+              </p>
+              <div class="dim-grid mt8" v-if="turn.lastDimensions">
+                <div class="dim-item" v-for="(v, k) in turn.lastDimensions" :key="k">
+                  <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
+                  <span class="v">{{ fmtScore(v) }}</span>
+                </div>
               </div>
             </div>
-          </div>
+          </details>
 
           <div class="bubble interviewer" v-if="turn.question">
             <span class="who">
@@ -58,8 +69,6 @@
             </span>
             {{ turn.question }}
           </div>
-
-          <div class="bubble candidate" v-if="lastAnswer">{{ lastAnswer }}</div>
         </div>
 
         <!-- 图跑挂了：进度已落库，能接着答，所以只是提示，不是错误页 -->
@@ -102,7 +111,6 @@
         recordId: null,
         turn: null,
         answer: '',
-        lastAnswer: '',
         submitting: false,
         booting: true,
         DIMENSION_LABELS,
@@ -115,6 +123,12 @@
         const t = this.turn;
         if (!t || !t.total) return '0%';
         return Math.min(100, (t.questionIndex - 1) / t.total * 100) + '%';
+      },
+      // 上一轮和当前题是同一道题时不显示（刚开局还没答过题，或答完最后一题
+      // 还没出下一题），否则会和下面的题面重复
+      showPrior() {
+        const t = this.turn;
+        return !!(t && t.lastSeq && t.lastQuestion && t.lastQuestion !== t.question);
       }
     },
     async mounted() {
@@ -156,7 +170,6 @@
             method: 'POST',
             body: { answer: submitted }
           });
-          this.lastAnswer = submitted;
           this.answer = '';
           this.apply(turn);
         } catch (e) {

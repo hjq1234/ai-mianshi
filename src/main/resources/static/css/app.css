@@ -171,11 +171,6 @@ tbody tr:last-child td { border-bottom: none; }
   border: 1px solid var(--border);
 }
 
-.bubble.candidate {
-  background: #eaf0ff;
-  margin-left: auto;
-}
-
 .bubble .who { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
 
 .feedback {
@@ -187,7 +182,26 @@ tbody tr:last-child td { border-bottom: none; }
   border-radius: 0 8px 8px 0;
 }
 
-.feedback .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+/* ── 上一轮回顾（默认折叠） ── */
+
+details.prior { cursor: pointer; }
+
+/* 折叠时只占一行；summary 是 flex，所以里面的 score / tag 能并排 */
+details.prior > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+}
+
+/* 去掉 Chrome/Safari 默认的三角，改用 ::before 自己画，好跟着主题色走 */
+details.prior > summary::-webkit-details-marker { display: none; }
+
+details.prior > summary::before { content: '▸'; color: var(--muted); }
+details.prior[open] > summary::before { content: '▾'; }
+
+/* 段落默认有上下 margin，展开后会把行距撑得很散 */
+details.prior .prior-body p { margin: 0; }
 
 .dim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
 

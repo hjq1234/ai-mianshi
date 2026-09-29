@@ -27,5 +27,12 @@ public record InterviewTurnVO(
         String nextAction,
         Double averageScore,
         String report,
-        String error) {
+        String error,
+        // 上一轮的原文。只有分数没有题目和回答，复盘时想不起「我当时是怎么答的」；
+        // 从后端带出来（而不是前端自己记），刷新页面也不会丢
+        Integer lastSeq,
+        String lastTopic,
+        String lastDifficulty,
+        String lastQuestion,
+        String lastAnswer) {
 }
