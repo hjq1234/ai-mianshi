@@ -16,7 +16,7 @@ import java.util.Map;
  * - 前面可能带一句「好的，评估如下：」→ 截取第一个 { 到最后一个 }
  * - 分数可能超出 0-10 → clamp
  * - nextAction 可能拼错或漏给 → 按分数兜底（NextAction.from）
- * - 五个维度可能缺几个 → 缺的补 0
+ * - 五个维度可能缺几个 → 缺的补 0（practice 除外，它允许为空，见 NULLABLE_DIMENSIONS）
  */
 public final class EvalResultParser {
 
@@ -56,11 +56,18 @@ public final class EvalResultParser {
         return Math.max(0, Math.min(10, value));
     }
 
-    /** 永远返回完整的五个维度，顺序固定——前端雷达图直接按顺序画 */
+    /**
+     * 永远返回完整的五个维度，顺序固定——前端雷达图直接按顺序画。
+     * 可空维度（见 EvalResult.NULLABLE_DIMENSIONS）允许保持 null。
+     */
     private static Map<String, Double> normalizeDimensions(Map<String, Double> raw) {
         Map<String, Double> out = new LinkedHashMap<>();
         for (String key : EvalResult.DIMENSIONS) {
-            out.put(key, clamp(raw == null ? null : raw.get(key)));
+            Double value = raw == null ? null : raw.get(key);
+            // LLM 按 evaluate.md 的约定，遇到纯概念题会给 practice: null，这里必须原样保留；
+            // 直接丢给 clamp 的话 null 会变成 0，那就成了「编一个分数出来」
+            out.put(key, value == null && EvalResult.NULLABLE_DIMENSIONS.contains(key)
+                    ? null : clamp(value));
         }
         return out;
     }

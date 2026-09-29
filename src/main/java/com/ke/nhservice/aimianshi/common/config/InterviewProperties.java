@@ -15,6 +15,12 @@ public class InterviewProperties {
     private int maxFollowUp = 3;
     private int maxSteps = 200;
 
+    /**
+     * 这个话题的出题会额外带上 hint_practice：问候选人的真实项目或线上场景。
+     * 没有它的话 practice 维度无从不打分——纯概念题谈不上「有没有实践」。
+     */
+    private String practiceTopic = "项目经历";
+
     /** 话题池：技术方向 -> 话题列表。取自 application.yml 的 app.interview.topics */
     private Map<String, List<String>> topics = new LinkedHashMap<>();
 
@@ -40,6 +46,10 @@ public class InterviewProperties {
     public int getMaxSteps() { return maxSteps; }
 
     public void setMaxSteps(int maxSteps) { this.maxSteps = maxSteps; }
+
+    public String getPracticeTopic() { return practiceTopic; }
+
+    public void setPracticeTopic(String practiceTopic) { this.practiceTopic = practiceTopic; }
 
     public Map<String, List<String>> getTopics() { return topics; }
 

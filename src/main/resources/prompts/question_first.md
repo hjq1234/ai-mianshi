@@ -11,6 +11,8 @@
 - 这是第 {questionIndex} 题，共 {maxQuestions} 题
 - 本题话题：{topic}
 
+{practiceHint}
+
 请提出第一道面试题。要求：
 1. 只输出题目本身，不要有任何前缀、编号、解释或问候语
 2. 题目要具体，避免「请介绍一下 XXX」这类泛泛而问

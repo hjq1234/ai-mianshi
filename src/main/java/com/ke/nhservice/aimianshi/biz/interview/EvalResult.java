@@ -22,6 +22,15 @@ public class EvalResult {
             "practice", "实践",
             "problemSolving", "解题思路");
 
+    /**
+     * 允许留空的维度。
+     *
+     * practice 是唯一一个「题目本身决定了能不能打分」的维度：问的是纯概念（JVM 内存模型之类），
+     * 候选人答得再好也谈不上「结合真实项目经验」。硬要求 LLM 给分的结果就是一堆 5-6 分的假数据，
+     * 反而看不出候选人到底有没有实践。所以这里允许它是 null，复盘页显示成 `-`。
+     */
+    public static final List<String> NULLABLE_DIMENSIONS = List.of("practice");
+
     private double overall;
     private Map<String, Double> dimensions = new LinkedHashMap<>();
     private List<String> coveredTopics = List.of();
@@ -36,7 +45,8 @@ public class EvalResult {
         r.setNextAction(NextAction.CONTINUE);
         Map<String, Double> dims = new LinkedHashMap<>();
         for (String key : DIMENSIONS) {
-            dims.put(key, 0.0);
+            // 可空维度给 null 而不是 0：0 看起来像「这块得零分」，null 才是「这题问不出来」
+            dims.put(key, NULLABLE_DIMENSIONS.contains(key) ? null : 0.0);
         }
         r.setDimensions(dims);
         return r;

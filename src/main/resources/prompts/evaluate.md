@@ -4,6 +4,7 @@
 技术方向：{domain}
 话题：{topic}
 本题难度：{difficulty}
+本题话题「{topic}」已经问过 {topicRounds} 轮，最多 {maxFollowUp} 轮；达到上限时 nextAction 请直接给 "SWITCH"
 
 问题：
 {question}
@@ -19,7 +20,7 @@
     "accuracy": 8.0,
     "depth": 7.0,
     "clarity": 8.0,
-    "practice": 6.0,
+    "practice": null,
     "problemSolving": 7.5
   },
   "coveredTopics": ["JVM 内存模型"],
@@ -33,7 +34,8 @@
   - accuracy：技术点是否正确，有无硬伤
   - depth：是否讲到原理层面
   - clarity：表达是否清晰有条理
-  - practice：是否结合真实项目经验
+  - practice：是否结合真实项目经验。只有当本题确实在考察项目或线上场景、且候选人谈了自己的实际做法时才打分；
+    纯概念题、候选人也没结合实际经历时，输出 null（宁可不打，也不要凑一个中间分）
   - problemSolving：分析问题的思路是否正确
 - coveredTopics：本次回答覆盖到的具体知识点
 - comment：一句话点评，不超过 80 字
