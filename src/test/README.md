@@ -84,6 +84,25 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 它会起两个上下文（一个配好模型、一个模型目录为空），端口 18090 / 18091，
 临时 SQLite 库，跑完自动关。**不需要 `DEEPSEEK_API_KEY`** —— 一次都不调 LLM。
 
+```bash
+CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp "$CP" \
+  com.ke.nhservice.aimianshi.checks.AsrStreamCheck [流式模型目录] [测试wav]
+```
+
+`AsrStreamCheck` 验的是 `/api/asr/stream/*` 那三个接口。两个参数都能省，默认用
+`D:/models/streaming-zh-14M` 和它自带的 `test_wavs/0.wav`（流式模型的测试音频是配套的，
+出问题时不用先怀疑「是不是音频本来就不对」）。端口 18092 / 18093。
+
+它有一条断言是**整份检查的意义所在**：
+
+> 喂到一半（第 7 片 / 共 56 片）就已经出字了
+
+只断「最后能转出正确文本」是没用的 —— 把整段攒起来一次性解码也照样绿。
+只有「喂到一半就有字」才证明它真是流式。另有一条反着来：说完灌 2 秒静音，
+`finalText` 要在**没调 stop 之前**就返回（那是「灰字行定稿后追加进框」依赖的路径，
+`chunk()` 里 `getResult` 和 `reset` 的顺序写反了的话这里会红，而别的断言全绿）。
+
 ---
 
 ## 前端验证程序
@@ -91,19 +110,30 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 不需要 `npm install`，node 直接跑：
 
 ```bash
-"/c/Program Files/nodejs/node" src/test/js/AsrPageCheck.js
+"/c/Program Files/nodejs/node" src/test/js/AsrPageCheck.js       # 离线那条，39 条
+"/c/Program Files/nodejs/node" src/test/js/AsrStreamPageCheck.js # 流式那条，49 条
 ```
 
 | 程序 | 验什么 |
 |---|---|
-| `AsrPageCheck` | 语音答题这条链：`api()` 的裸二进制分支（以及 JSON / FormData 两条老路没被弄坏）、`asr.js` 的状态机、`asrUseTyping`/`asrReset` **不会**白发一次 `/api/asr/transcribe`、`interview.html` 的模板事实（语音模式下是只读块不是 textarea） |
+| `AsrPageCheck` | **离线**这条链：`api()` 的裸二进制分支（以及 JSON / FormData 两条老路没被弄坏）、`asr.js` 的状态机、`asrReset`/重录 **不会**白发一次 `/api/asr/transcribe`、`interview.html` 的模板事实（**还是一个答题框**、麦克风按 `micAvailable` 显示） |
+| `AsrStreamPageCheck` | **流式**这条链，四件都是「写错了不报错、只是行为不对」的事：① `partial` **不进**答题框、只有 `finalText` 追加 ② 分片**串行**发 ③ 提交时 discard（不追加但 stop 照发）④ `micAvailable` 只看当前模式对应的那个 available |
 
-它自己搭浏览器替身（`localStorage` / `document` / `fetch` / `MediaRecorder` /
-`AudioContext` / `navigator`），然后照页面里的方式把 `app.js` 和 `asr.js` 载进来。
+两份分开是因为替身环境完全不搭：一份装 `MediaRecorder` + `decodeAudioData`，
+另一份装 `AudioWorkletNode` + `audioWorklet.addModule`。合成一份的话每个用例都得先声明
+「我现在测哪条」，读起来比两份还累。
+
+它们自己搭浏览器替身（`localStorage` / `document` / `fetch` / `navigator` 等），
+然后照页面里的方式把 `app.js` 和对应的 js 载进来。
 
 > ⚠️ 搭替身时踩过的坑：node 22 自带只读的全局 `navigator`，直接
 > `globalThis.navigator = x` 是**静默失败**的（非严格模式不报错、值也不变）。
 > 要换掉它必须用 `Object.defineProperty`。
+
+> ⚠️ `AsrStreamPageCheck` 里的假 `AudioContext` **故意忽略**构造参数里的 `sampleRate`。
+> 真浏览器就这样：老版本的 Chrome/Safari 收下 `{sampleRate: 16000}`，给你一个硬件原生
+> 采样率的上下文，而且**不报错**。替身要是老老实实把 16000 还回去，
+> 「拿到 48000 就报错、不静默按 48k 录」那条断言永远测不到东西。
 
 ---
 
@@ -114,7 +144,10 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 `ExportCheck.js`、`DaoCheck.java`、`StatsCheck.java`。
 
 `PageCheck.js` 是本站最重的一份（177 条断言），它**会读仓库里的源码**跑，
-所以改了 `app.js` / `charts.js` / 页面模板之后仍然应该跑一遍它做跨页回归：
+所以改了 `app.js` / `charts.js` / 页面模板之后仍然应该跑一遍它做跨页回归。
+它把页面用到的每个 js 都载进沙箱，**加一个新的页面级 js 时要在它里面补一段**——
+不补的表现是 `interview.html 的内联脚本能执行` 那一条报
+`XXX is not defined`（加流式那次就是这么红的）：
 
 ```bash
 "/c/Program Files/nodejs/node" /c/Users/huangjinqing001/AppData/Local/Temp/PageCheck.js

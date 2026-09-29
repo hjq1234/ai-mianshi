@@ -139,45 +139,78 @@ sherpa-onnx 没发 Maven 中央仓库，发在 JitPack；而本机 `settings.xml
 
 换台机器、或清了本地仓库，这两条要重做一次。
 
-**2. 下模型（约 228 MB）**
+**2. 下模型（两套，各下不下都行）**
 
-从 `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` 下两个文件到**仓库外**的目录：
+两套模型在**同一个 sherpa-onnx 的 release tag 下**（`asr-models`，不是版本号那个 tag）：
 
-```
-model.int8.onnx    228.2 MB   ← 别下 model.onnx，那是 fp32 版，894 MB，没必要
-tokens.txt           0.3 MB
+| | 离线（录完再转） | 流式（边说边出字） |
+|---|---|---|
+| 模型 | SenseVoiceSmall int8 | streaming zipformer zh-14M int8 |
+| 大小 | **228 MB**（`model.int8.onnx` + `tokens.txt`） | **24 MB**（encoder / decoder / joiner 三个 `.onnx` + `tokens.txt`） |
+| 出字时机 | 停止录音后一次性出 | 每 100ms 一片，边说边出 |
+| 标点 / 数字规整 | 有（模型自带 ITN） | **没有**，标点和「二零二五 → 2025」都要自己补 |
+| 识别准确率 | 更好 | 明显差一档（14M 参数的模型） |
+| 用途 | 想一次拿到干净的整段 | 想看见字在长、长回答不用等 |
+
+```bash
+# 离线（约 228 MB）。别下 model.onnx，那是 fp32 版 894 MB，没必要
+# https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
+→ 只要 model.int8.onnx（228.2 MB）+ tokens.txt（0.3 MB）
+
+# 流式（约 24 MB）。解压后从里面的 int8 那套挑四个文件出来
+# https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2
+→ encoder-epoch-99-avg-1.int8.onnx（21.6 MB）
+  decoder-epoch-99-avg-1.int8.onnx（ 1.89 MB）
+  joiner-epoch-99-avg-1.int8.onnx（ 1.80 MB）
+  tokens.txt（48.7 KB）
 ```
 
 **3. 指过去**
 
 ```bash
-export APP_ASR_MODEL_DIR=D:/models/sense-voice
+export APP_ASR_MODEL_DIR=D:/models/sense-voice            # 离线
+export APP_ASR_STREAM_MODEL_DIR=D:/models/streaming-zh-14M   # 流式
 ```
 
-没设这个变量时 `/api/asr/status` 返 `available:false`，页面不显示麦克风按钮。
+两个变量相互独立，**只下一个是很正常的状态**：另一个对应的选项在页面里是灰的，
+答题照常。两个都没设时 `/api/asr/status` 返 `available:false` + `streamAvailable:false`，
+麦克风按钮和模式下拉都不显示，只剩打字。
 
-**它是怎么工作的**：浏览器录音 → 页内用 `OfflineAudioContext` 重采样成 16k 单声道 PCM16
-→ `POST /api/asr/transcribe` → 转写结果落进答题框 → 改完走**原来那个** `/answer` 接口。
-服务端不碰音频格式（不引 FFmpeg），`graph/` 包和评分链路一行没动。
+> 文件名（`encoder-epoch-99-avg-1.int8.onnx` 这几个）**不在 `application.yml` 里**，
+> 是 `AsrProperties.Stream` 的字段默认值。目录跟机器绑定、文件名跟模型绑定 ——
+> 而 yml 因为里面有本地的 `base-url` / `model` 改动**没有提交**，文件名塞进去的话，
+> 换台机器的人下了模型、环境变量也设了，还是会看到「流式模型文件不存在」。
+
+**它是怎么工作的**
+
+- **离线**：浏览器录音 → 页内用 `OfflineAudioContext` 重采样成 16k 单声道 PCM16
+  → `POST /api/asr/transcribe` → 结果落进答题框
+- **流式**：`AudioWorklet` 每 100ms 交一片裸 PCM → `POST /api/asr/stream/chunk` 一片一片发
+  → 正在说的那半句显示在**麦克风上方一行灰字**里，说到停顿定稿才追加进答题框
+
+两条路的服务端都不碰音频格式（不引 FFmpeg），`graph/` 包和评分链路一行没动。
 
 **语音和打字不是两个模式**：就一个答题框，麦克风是它右下角常驻的图标。转写回来是
 **追加**进去，不覆盖你已经打的字。第一版做成了互斥的模式切换（语音模式下把输入框藏起来、
 转写结果只读），实测太别扭 —— 说错一个字就得整段重录。砍了。
 
-**为什么是「录完再转」而不是边说边出字**：因为 `SenseVoiceSmall` 是**离线（非流式）模型**，
-sherpa-onnx 只提供 `OfflineRecognizer` 这一个入口，拿不到中间结果——这不是前端没接好，
-是模型本身的性质决定的。sherpa-onnx 有流式能力，但要换一套模型
-（streaming zipformer / paraformer transducer）和一套 API（`OnlineRecognizer` + 分片喂 `OnlineStream`），
-顺带前端也要从「录完整段 POST」改成「边录边分片上传」，等于把这条链重写一遍。
+**「流式 / 离线」那个下拉选的是采集方式，不是「语音还是打字」**，答题框始终只有一个。
+选择记在 `localStorage`，默认流式。
 
-折中方案有两个，都还没做：
+**半句为什么不直接写进答题框**：因为 `partial` 一直在被改写（「我要用 redis」→
+「我要用 Redis 做缓存」），写进框里会把你打的草稿反复搅乱、光标也没了。所以它只进那行灰字，
+**只有定稿的 `finalText` 才追加进框**。灰字行做成斜体浅色，一眼能看出「这还不是框里的内容」。
 
-- **伪流式**：保持现在的模型，前面加一个 VAD（silero-vad，另加一个小模型文件）按停顿切段，
-  说完一句就把那句转出来。代价是切点处的字会错，段与段之间没有上下文。
-- **真流式**：换模型 + 换本地推理入口 + 改前端上传协议。
+**为什么用 AudioWorklet 而不是继续用 MediaRecorder**：`MediaRecorder` 吐的是压缩容器的
+**碎片**（webm/opus），只有第一片带容器头，单独丢给 `decodeAudioData` 解不开。流式这条路
+必须直接拿裸 PCM。这是 AudioWorklet 唯一的存在理由。
 
-真做的价值主要是「长回答不用等一次转写」；但实话说，一段 30 秒的回答离线转写也就 1 秒出头，
-收益没有看上去那么大。
+**为什么要分片而不是 WebSocket**：不用引任何依赖，鉴权（`Authorization` 头）和访问日志
+白捡 —— 现有的 `RequestLogFilter` 直接就能看见每个分片。单用户下分片的开销可以忽略。
+
+**已知不完美**：流式那条**没有标点**，也**不做数字规整**（14M 的小模型没带 ITN）。
+识别准确率也比离线那套差一档。要标点的话得再挂一个 `OfflinePunctuation` 模型按定稿句子补，
+那是另一件事。
 
 ## 技术栈
 
@@ -192,7 +225,7 @@ sherpa-onnx 只提供 `OfflineRecognizer` 这一个入口，拿不到中间结�
 | 密码 | `spring-security-crypto` | 只要 BCrypt 一个类，不引 Spring Security 全家桶 |
 | 前端 | Vue 3 CDN 版 | 无 node/npm 构建链，一个 `mvn package` 出一个 jar |
 | 图表 | ECharts 5.6.0（CDN） | 复盘页三张坐标图。锁 5.6.0 而不是 6.x：只用 radar/line/bar，要的是 API 稳定 |
-| 语音识别 | sherpa-onnx + SenseVoiceSmall int8 | 本地跑，不联网、音频不出机器；单 jar + 单文件模型，不需要 Python 进程 |
+| 语音识别 | sherpa-onnx + SenseVoiceSmall int8（离线）/ streaming zipformer zh-14M（流式） | 本地跑，不联网、音频不出机器；一个 jar 带两套 API（`OfflineRecognizer` / `OnlineRecognizer`），不需要 Python 进程 |
 
 ## 目录结构
 
@@ -263,9 +296,21 @@ GET    /api/interview/{id}/detail   复盘详情（含 dimensionAverages 本场�
 GET    /api/interview/{id}/trace    节点轨迹
 GET    /api/interview/stats         历史五维均分，给雷达图做对比
 
-GET    /api/asr/status              语音是否可用（前端据此决定显不显示麦克风）
-POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {text}
+GET    /api/asr/status              两条语音路各自的可用性（平铺的 available / streamAvailable）
+POST   /api/asr/transcribe          离线：body 是裸 PCM16 小端字节（整段），返回 {text}
+POST   /api/asr/stream/start        流式：开会话 → {sessionId}
+POST   /api/asr/stream/chunk        流式：一片音频（裸 PCM16，约 100ms）→ {partial, finalText}
+POST   /api/asr/stream/stop         流式：结束会话 → {finalText}（最后没定稿的那半句）
 ```
+
+`/status` 里那两组字段是**平铺**的（`available` / `streamAvailable`），不是
+`stream: {available}` 嵌套。原因很具体：验证程序 `AsrApiCheck` 取 JSON 字段时取的是
+**第一个**同名 key，嵌套之后 `extract(status, "available")` 哪天就会取到流式那个，
+断言开始测另一个东西 —— 而且**它是绿的**。
+
+`/stream/chunk` **不接受并发**：音频是时序数据，两片乱序到达不会报错，只会转出一段
+流利但完全不对的中文。前端是「等上一个响应回来才发下一个」。会话空闲 2 分钟
+（`app.asr.stream.idle-seconds`）自动回收，同时最多 4 个会话。
 
 除 `/api/auth/login` 外全部要 `Authorization: Bearer <token>`。
 
@@ -318,7 +363,11 @@ POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {tex
 | 泳道图在 40 题以上会变长 | 每轮一行、不做虚拟滚动。10 题的设计上限下没问题 |
 | 无流式输出 | 事件驱动架构的必然结果。要加就让 `/answer` 单独返回 SSE |
 | 语音依赖两个不在中央仓库的 jar | 换机器 / 清了本地仓库要重跑两次 `install:install-file`，仓库里没有东西记录这一步 |
-| 228 MB 模型不进仓库 | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
+| 两套模型都不进仓库（228 MB + 24 MB） | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
+| 流式那条**没有标点、不做数字规整** | 14M 的小模型没带 ITN。补的话要在定稿句子上再挂一个 `OfflinePunctuation` 模型，是另一件事 |
+| 流式识别准确率比离线差一档 | 14M vs SenseVoiceSmall。要更准就把 `decoderFile` 换成 fp32 那个（7.5 MB，改 `AsrProperties.Stream` 一行） |
+| 流式会话最多同时 4 个，空闲 2 分钟回收 | `app.asr.stream.max-sessions` / `idle-seconds`。前端不正常退出（关标签页）时那次会话会挂到过期才回收，表现是「试了几次之后点麦克风说会话太多」——等两分钟，或者重启 |
+| `partial` 不进答题框，只在麦克风上方那行灰字里 | 它一直在被改写，写进框里会把你打的草稿反复搅乱、光标也没了 |
 | 只支持 Windows x64 | `pom.xml` 里写死了 `native-lib-win-x64`。换平台改那一行 artifactId 即可 |
 | 转写结果可以直接改 | 第一版是只读的，理由是「能改就会边想边改稿，练的就不是口语表达了」。真用起来太别扭：说错一个字就得整段重录。现在当草稿用 |
 | 语音上限 `app.asr.max-seconds` | 默认见 `AsrProperties`。到点自动停并转写（等用户自己发现「已经说了几分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
@@ -340,8 +389,5 @@ POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {tex
 
 - 嵌入知识库检索（`biz/knowledge` 只留了接口）
 - 流式输出（出题要等 5-15 秒，期间前端只能转圈）
-- 流式语音识别（边说边出字）。**当前模型做不到**：SenseVoiceSmall 是离线模型，
-  sherpa-onnx 只给了 `OfflineRecognizer` 这一个入口，没有对应的流式版本。
-  真要做流式得换模型（streaming zipformer / paraformer transducer）、换客户端
-  （`OnlineRecognizer` + `OnlineStream`）、换前端（分片上传而不是录完整段 POST），
-  是另一件事，不是这次的延续。见「语音答题」那节末尾
+- 给流式的定稿句子补标点和数字规整（挂 `OfflinePunctuation`，见「语音答题」那节末尾）
+- 用 VAD 让离线那条也「按停顿切段」（现在的折中是流式那条承担了这件事）
