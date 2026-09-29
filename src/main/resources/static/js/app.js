@@ -86,6 +86,18 @@ function fmtScore(score) {
   return score === null || score === undefined ? '-' : Number(score).toFixed(1);
 }
 
+/**
+ * 分钟数按量级换单位。
+ * 「886 分钟」读不出「这是隔天接着答的」，换成「14.8 小时」一眼就明白中间停了很久。
+ */
+function fmtMinutes(minutes) {
+  if (minutes === null || minutes === undefined) return '-';
+  if (minutes < 1) return '不到 1 分钟';
+  if (minutes < 90) return Math.round(minutes) + ' 分钟';
+  if (minutes < 60 * 36) return (minutes / 60).toFixed(1) + ' 小时';
+  return (minutes / 60 / 24).toFixed(1) + ' 天';
+}
+
 /** 分数配色：8 分以上绿、4 分以下红、中间黄 */
 function scoreClass(score) {
   if (score === null || score === undefined) return '';
@@ -184,6 +196,29 @@ function mdCell(text) {
 }
 
 /**
+ * 复盘要同时给两个「用时」，只给一个都会误导：
+ *  - engineMs：引擎真正干活的时间，Σ trace.cost_ms。这也正是泳道图上色块的宽度之和，
+ *    不含你作答时的等待（等待期间没有节点在跑，自然也没有 trace 记录）。
+ *  - spanMs：记录的时间跨度（updatedAt - createdAt），含你作答和中间离开的时间。
+ *
+ * 只给跨度会闹笑话：隔天续答的那场跨度 885.6 分钟 = 14.8 小时，
+ * 读起来像「这场面试面了 14 小时」，而引擎其实只跑了 7.1 分钟。
+ */
+function reportDurations(detail) {
+  const traces = (detail && detail.traces) || [];
+  const engineMs = traces.reduce((sum, t) => sum + (t.costMs || 0), 0);
+  const spanMs = detail && detail.createdAt && detail.updatedAt
+    ? Math.max(0, detail.updatedAt - detail.createdAt)
+    : null;
+  return { engineMs: engineMs > 0 ? engineMs : null, spanMs };
+}
+
+/** 毫秒 → 分钟，给 fmtMinutes 用 */
+function msToMinutes(ms) {
+  return ms === null || ms === undefined ? null : ms / 60000;
+}
+
+/**
  * 复盘详情 → Markdown 全文。
  *
  * 数据全部来自 /api/interview/{id}/detail，所以导出不需要新接口，
@@ -209,9 +244,9 @@ function buildReportMarkdown(detail) {
   // 数据概览：复盘页上那四张图导不出来，所以把图上的数字用文字带一份，
   // 否则导出文件里就少了「用时多久、哪个话题最弱」这些一眼能看出的事
   L.push('## 数据概览', '');
-  const minutes = detail.createdAt && detail.updatedAt
-    ? Math.max(1, Math.round((detail.updatedAt - detail.createdAt) / 60000)) : null;
-  L.push(`- 用时：${minutes === null ? '-' : '约 ' + minutes + ' 分钟'}（含作答时间）`);
+  const dur = reportDurations(detail);
+  L.push(`- 引擎耗时：${fmtMinutes(msToMinutes(dur.engineMs))}（泳道色块之和，不含作答等待）`);
+  L.push(`- 从开始到结束：${fmtMinutes(msToMinutes(dur.spanMs))}`);
 
   const averages = detail.dimensionAverages || {};
   const dimKeys = Object.keys(averages);

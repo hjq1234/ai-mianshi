@@ -200,8 +200,66 @@ details.prior > summary::-webkit-details-marker { display: none; }
 details.prior > summary::before { content: '▸'; color: var(--muted); }
 details.prior[open] > summary::before { content: '▾'; }
 
-/* 段落默认有上下 margin，展开后会把行距撑得很散 */
+/* 段落默认有上下 margin，展开后会把行距撑得很散，所以清掉。
+   间距改由 p + p 给——这里**不能**指望 HTML 上的 .mt8：
+   `details.prior .prior-body p` 的权重是 (0,2,2)，压得住 .mt8 的 (0,1,0)，
+   所以页面上那几个 mt8 一直是失效的，段落全贴在一起 */
 details.prior .prior-body p { margin: 0; }
+details.prior .prior-body p + p { margin-top: 8px; }
+
+/* ── 逐题详情（复盘页，默认折叠） ──
+   和 details.prior 是同一套折叠交互，区别是这里是一列 10 条，
+   所以多了分隔线和 hover 底色，扫列表时能看清读到哪一行 */
+
+details.qa {
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+/* 最后一条不再画分隔线，否则和卡片下边缘叠成两道 */
+details.qa:last-child { border-bottom: 0; }
+
+details.qa > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 4px;
+  list-style: none;
+}
+
+details.qa > summary:hover { background: var(--bg); }
+details.qa > summary::-webkit-details-marker { display: none; }
+
+details.qa > summary::before { content: '▸'; color: var(--muted); }
+details.qa[open] > summary::before { content: '▾'; }
+
+details.qa .qa-seq { font-weight: 600; white-space: nowrap; }
+
+/* 题面占满剩余宽度、超出省略。min-width:0 是 flex 子项能省略的必要条件
+   （默认 min-width:auto 会把容器撑开，text-overflow 就永远不生效） */
+details.qa .qa-question {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+/* 题号/标签/分数不能被题面挤扁。.tag 是 inline-block，进了 flex 就是 flex item，
+   默认 flex-shrink:1，窄屏下会被压成两个字一行 */
+details.qa > summary > .qa-seq,
+details.qa > summary > .tag,
+details.qa > summary > .score { flex: none; }
+
+details.qa .qa-body {
+  padding: 12px 4px 16px 22px;
+  border-top: 1px dashed var(--border);
+}
+
+details.qa .qa-body p { margin: 0; }
+details.qa .qa-body p + p { margin-top: 8px; }
+details.qa .qa-body .dim-grid { margin-top: 8px; }
 
 .dim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
 

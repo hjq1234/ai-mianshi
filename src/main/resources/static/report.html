@@ -78,7 +78,8 @@
         <h2>图执行路径</h2>
         <p class="sub">
           引擎每一轮实际走过的节点，最后一步是图做的分支决策。
-          整场用时约 {{ durationMinutes }} 分钟（含你作答的时间，所以比色块加起来长）。
+          引擎跑了 {{ durations.engine }}（就是色块宽度之和，不含你作答的等待），
+          从开始到结束是 {{ durations.span }} —— 中间差的就是你思考和离开的时间。
         </p>
         <div id="chart-swimlane" v-html="swimlaneHtml"></div>
       </div>
@@ -124,32 +125,38 @@
         </table>
       </div>
 
-      <!-- 逐题详情 -->
+      <!-- 逐题详情：默认全部收起，一题一行。
+           原来是 10 个平铺的区块（每题都摊着问/答/评语/五维），一张卡片就一千多 px 高，
+           想翻到底下的综合报告得滚很久。收起来后是一张能一眼扫完的列表：
+           题号、话题、难度、分数都在，题面只占一行（超出省略），点开才展开全文 -->
       <div class="card">
         <h2>逐题详情</h2>
-        <div v-for="d in detail.dialogues" :key="d.seq"
-             style="border-bottom:1px solid var(--border);padding:14px 0">
-          <div class="row" style="align-items:baseline">
-            <strong>第 {{ d.seq }} 题</strong>
+        <p class="sub">点题号展开，看题目原文、你的回答、评语和五维打分。</p>
+
+        <details class="qa" v-for="d in detail.dialogues" :key="d.seq">
+          <summary>
+            <span class="qa-seq">第 {{ d.seq }} 题</span>
             <span class="tag">{{ d.topic || '综合' }}</span>
             <span class="tag">{{ d.difficulty || '-' }}</span>
-            <span style="flex:1"></span>
+            <span class="qa-question">{{ d.question }}</span>
             <span class="score" :class="scoreClass(d.score)">{{ fmtScore(d.score) }}</span>
-          </div>
+          </summary>
 
-          <p class="mt8"><span class="muted">问：</span>{{ d.question }}</p>
-          <p class="mt8" style="white-space:pre-wrap">
-            <span class="muted">答：</span>{{ d.answer || '（未作答）' }}
-          </p>
-          <p class="mt8" v-if="d.comment"><span class="muted">评语：</span>{{ d.comment }}</p>
+          <div class="qa-body">
+            <p><span class="muted">问：</span>{{ d.question }}</p>
+            <p style="white-space:pre-wrap">
+              <span class="muted">答：</span>{{ d.answer || '（未作答）' }}
+            </p>
+            <p v-if="d.comment"><span class="muted">评语：</span>{{ d.comment }}</p>
 
-          <div class="dim-grid mt8" v-if="d.dimensions">
-            <div class="dim-item" v-for="(v, k) in d.dimensions" :key="k">
-              <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
-              <span class="v">{{ fmtScore(v) }}</span>
+            <div class="dim-grid" v-if="d.dimensions">
+              <div class="dim-item" v-for="(v, k) in d.dimensions" :key="k">
+                <span class="k">{{ DIMENSION_LABELS[k] || k }}</span>
+                <span class="v">{{ fmtScore(v) }}</span>
+              </div>
             </div>
           </div>
-        </div>
+        </details>
       </div>
 
       <!-- 综合报告 -->
@@ -189,11 +196,16 @@
         if (!this.detail) return 0;
         return new Set(this.detail.dialogues.map(d => d.topic).filter(Boolean)).size;
       },
-      // 整场用时用记录的时间跨度，不是 Σ cost_ms——作答的等待时间没有 trace
-      durationMinutes() {
-        const d = this.detail;
-        if (!d || !d.createdAt || !d.updatedAt) return '-';
-        return Math.max(1, Math.round((d.updatedAt - d.createdAt) / 60000));
+      // 两个用时都显示。早先只显示记录跨度，理由是「作答的等待没有 trace」，
+      // 这在连着答完的场次上没问题（跨度 24 分钟 ≈ 引擎 7 分钟 + 作答 17 分钟），
+      // 但隔天续答的那场跨度是 885 分钟，「整场用时约 886 分钟」读起来像面了 14 小时。
+      // 引擎耗时正好等于泳道色块宽度之和，跟图对得上，所以两个都给
+      durations() {
+        const d = reportDurations(this.detail);
+        return {
+          engine: fmtMinutes(msToMinutes(d.engineMs)),
+          span: fmtMinutes(msToMinutes(d.spanMs))
+        };
       },
       // 本场一道题都没打出实践分。雷达图按 0 画了，得说明一句，
       // 不然看图的人会以为「实践能力是 0 分」

@@ -166,6 +166,10 @@ function renderScoreTrend(el, dialogues) {
     const average = scored.length
       ? scored.reduce((sum, d) => sum + d.score, 0) / scored.length
       : null;
+    // 1 分 ≈ 19px（0~10 的轴画在 190px 高的网格里），两个 11px 的标签靠不到 1 分就重叠了
+    const lastScore = list.length ? list[list.length - 1].score : null;
+    const lastLabelCollides = average !== null && lastScore !== null && lastScore !== undefined
+      && Math.abs(lastScore - average) < 1;
 
     // 连续同话题的题归成一段，段内交替底色
     const bands = [];
@@ -213,7 +217,15 @@ function renderScoreTrend(el, dialogues) {
       },
       series: [{
         type: 'line',
-        data: list.map((d) => d.score),
+        // 末题得分和均分贴得太近时，末题那个数值标签不画。
+        // 均分虚线的标签固定在网格右边缘、线的上方，末题的标签也在右边缘、点的上方，
+        // 两者高度差不到 1 分就会叠在一起——这不是偶发：截图里那场 10 题均分 7.5，
+        // 末题也正好 7.5，「均分 7.5」和「7.5」当场糊成一团。
+        // 两个数几乎一样时留均分那条（信息量更大），点本身的数值 tooltip 里还有
+        data: list.map((d, i) => ({
+          value: d.score,
+          label: { show: !(lastLabelCollides && i === list.length - 1) }
+        })),
         symbolSize: 7,
         itemStyle: { color: CHART_COLORS.primary },
         lineStyle: { width: 2, color: CHART_COLORS.primary },
