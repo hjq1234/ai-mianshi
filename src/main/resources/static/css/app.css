@@ -364,17 +364,22 @@ details.prior .prior-body p { margin: 0; }
 .swim-block {
   height: 22px;
   line-height: 22px;
-  padding: 0 6px;
+  padding: 0 7px;
   border-radius: 4px;
   border: 1px solid #dde3ea;
   background: #eef2f7;
   color: #4b5563;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* 耗时极小的节点宽度会接近 0，给个下限让标签还读得出来 */
-  min-width: 34px;
+  box-sizing: border-box;
+  /* ★ 耗时极小的节点宽度会接近 0，给个下限让标签还读得出来。
+     这个值是按「最长 3 个汉字」算的：3×12 + 14(padding) + 2(border) = 52，留余量取 56。
+     上一版是 34px，content 只有 20px，连「开场」两个字（22px）都放不下，
+     于是整排标签被截成「开…」「出…」「等…」——图就白画了。
+     改这里要同步 charts.js 的 NODE_LABELS 最长字数 */
+  min-width: 56px;
 }
 
 .swim-block.suspend { background: #fdf3e3; border-color: #f6e0bd; color: var(--warning); }

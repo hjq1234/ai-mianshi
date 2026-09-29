@@ -19,11 +19,18 @@ const CHART_COLORS = {
 /** 五维的固定顺序。雷达图的五个轴按这个顺序摆，不能跟着对象的 key 顺序乱跑 */
 const CHART_DIMENSIONS = Object.keys(DIMENSION_LABELS);
 
-/** 图里的节点名 → 中文。没列到的（将来加了新节点）原样显示英文 */
+/**
+ * 图里的节点名 → 中文。没列到的（将来加了新节点）原样显示英文。
+ *
+ * ★ 最长不超过 3 个汉字。app.css 里 .swim-block 的 min-width 是按 3 字算死的
+ * （色块宽度按耗时归一化，出题/开场这些快节点一定落在宽度下限上），
+ * 加一个 5 字标签就会当场被 text-overflow 截成「等待作…」——
+ * 上一版就是「等待作答」4 字被截，整排读不出来。改长度要同步改那个 min-width。
+ */
 const NODE_LABELS = {
   start: '开场',
   question: '出题',
-  wait_answer: '等待作答',
+  wait_answer: '等待',
   evaluate: '评分',
   deepen: '深入',
   continue: '换角度',
@@ -189,11 +196,11 @@ function renderScoreTrend(el, dialogues) {
           return lines.join('<br>');
         }
       },
+      // 不写 xAxis.name：默认的 nameLocation:'end' 会把「题号」竖排贴在网格右边缘，
+      // 一半压在轴线上看着像被裁。刻度就是 1~10，标题也写着「分数趋势」，不用再标
       xAxis: {
         type: 'category',
         data: list.map((d) => String(d.seq)),
-        name: '题号',
-        nameTextStyle: { color: CHART_COLORS.muted },
         axisLine: { lineStyle: { color: CHART_COLORS.border } },
         axisLabel: { color: CHART_COLORS.muted }
       },
@@ -250,6 +257,17 @@ function renderScoreTrend(el, dialogues) {
 
 /* ────────────────────────── ③ 话题覆盖度 ────────────────────────── */
 
+/**
+ * 每个话题的**均分**（0~10），题数写在标签里。
+ *
+ * ★ 为什么不画题数：`max-follow-up` 生效后每话题最多问 3 题，10 题的场次凑成
+ * 「5 个话题 × 2 题」是常态。画题数就是五根一样长的柱子——视觉权重最大的那根
+ * 柱子承载的是恒定值，真正有差异的均分反而被挤进标签小字里。实测的真实数据：
+ * 题数全是 2，均分 7.2 / 7.4 / 7.5 / 7.5 / 8.0。
+ *
+ * 轴仍然从 0 起。柱长差异小（7.2 是 8.0 的 90%）是真实的——这场每个话题水平
+ * 都差不多。想让它看起来更有差别就得截断坐标轴，那是骗人，不做。
+ */
 function renderTopicCoverage(el, dialogues) {
   if (!el || chartLibMissing(el)) return;
 
@@ -271,27 +289,36 @@ function renderTopicCoverage(el, dialogues) {
       return;
     }
 
-    // y 轴是从下往上画的，所以先按题数降序、再倒过来喂进去，最大的才在上面
-    const rows = [...stats.values()]
-      .sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic))
-      .reverse();
+    const avgOf = (r) => (r.scored ? r.sum / r.scored : null);
+    // y 轴从下往上画，data[0] 在最下面。按均分**降序**喂进去，最弱的就落在最上面：
+    // 复盘要先看拖后腿的，不是先看好的。没打分的（纯概念题）当 -1，
+    // 排到最后 → 也就排到最上面，跟「这里没数据、你该看一眼」是一致的
+    const rows = [...stats.values()].sort((a, b) => {
+      const x = avgOf(a), y = avgOf(b);
+      return (y === null ? -1 : y) - (x === null ? -1 : x)
+        || a.topic.localeCompare(b.topic);
+    });
 
     echarts.init(el).setOption({
-      grid: { left: 8, right: 96, top: 10, bottom: 8, containLabel: true },
+      // right 留 110：柱子最长会顶到网格右边缘（均分 10 分时），
+      // 标签画在柱子右侧、得落在这块预留区里才不会被裁
+      grid: { left: 8, right: 110, top: 10, bottom: 8, containLabel: true },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
         formatter: (params) => {
           const row = rows[params[0].dataIndex];
+          const avg = avgOf(row);
           return row.topic + '<br>' + row.count + ' 题'
-               + (row.scored ? '　均分 ' + oneDecimal(row.sum / row.scored) : '　无评分');
+               + (avg === null ? '　没有评分' : '　均分 ' + oneDecimal(avg));
         }
       },
       xAxis: {
         type: 'value',
-        minInterval: 1,
+        min: 0,
+        max: 10,
         splitLine: { lineStyle: { color: CHART_COLORS.border } },
-        axisLabel: { color: CHART_COLORS.muted, formatter: '{value} 题' }
+        axisLabel: { color: CHART_COLORS.muted, formatter: '{value} 分' }
       },
       yAxis: {
         type: 'category',
@@ -303,14 +330,21 @@ function renderTopicCoverage(el, dialogues) {
       series: [{
         type: 'bar',
         barWidth: 16,
-        data: rows.map((r) => ({ value: r.count, avg: r.scored ? r.sum / r.scored : null })),
+        // 没打分的题画成 0 长柱子（ECharts 认不出 null），标签里写明「无评分」，
+        // 免得被读成「这个话题均分 0」
+        data: rows.map((r) => ({
+          value: avgOf(r) === null ? 0 : avgOf(r),
+          count: r.count,
+          avg: avgOf(r)
+        })),
         itemStyle: { color: CHART_COLORS.primary, borderRadius: [0, 4, 4, 0] },
         label: {
           show: true,
           position: 'right',
           color: CHART_COLORS.muted,
           fontSize: 12,
-          formatter: (p) => p.value + ' 题 · 均分 ' + oneDecimal(p.data.avg)
+          formatter: (p) => p.data.count + ' 题 · '
+            + (p.data.avg === null ? '无评分' : '均分 ' + oneDecimal(p.data.avg))
         }
       }]
     });
