@@ -33,14 +33,22 @@ function logout() {
  * - 自动带 Authorization 头
  * - 401 自动清 token 跳登录
  * - code !== 0 抛异常，调用方 catch 后提示
- * - body 自动 JSON 序列化；FormData 原样传（文件上传）
+ * - body 自动 JSON 序列化；FormData 原样传（文件上传）；裸二进制原样传（语音）
  */
 async function api(path, options = {}) {
   const opts = { method: options.method || 'GET', headers: {} };
   const isForm = options.body instanceof FormData;
+  // 裸二进制（语音是 PCM16 字节）：原样发，不 JSON 序列化。
+  // 加这条分支之前没有任何调用方传过 Blob/ArrayBuffer，所以对现有页面是纯增量
+  const isRaw = options.body instanceof Blob
+    || options.body instanceof ArrayBuffer
+    || ArrayBuffer.isView(options.body);
 
   if (options.body !== undefined) {
     if (isForm) {
+      opts.body = options.body;
+    } else if (isRaw) {
+      opts.headers['Content-Type'] = options.contentType || 'application/octet-stream';
       opts.body = options.body;
     } else {
       opts.headers['Content-Type'] = 'application/json';

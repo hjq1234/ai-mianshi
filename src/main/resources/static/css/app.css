@@ -292,6 +292,72 @@ details.qa .qa-body .dim-grid { margin-top: 8px; }
 /* 用 > * 而不是 > i：页面里写的是 <div :style>，只匹配 i 的话宽度设了也不显示 */
 .progress-bar > * { display: block; height: 100%; background: var(--primary); transition: width .3s; }
 
+/* ────────────────────────── 语音答题 ────────────────────────── */
+
+.asr-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+/* 「改用打字 / 改用语音」推到最右边，别和录音按钮挤在一起 */
+.asr-switch { margin-left: auto; }
+
+/* 电平条：让用户看见麦克风真收到声音了。没它就只能录完才发现是空的 */
+.asr-meter {
+  flex: 1;
+  max-width: 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.asr-meter > i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width .1s linear;
+}
+
+/* .small 没定义（只有 button.small），所以这里自己起名 */
+.asr-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 一行小字的「转写结果（只能重录，不能改）」上下都要贴紧 */
+.asr-result > .asr-hint { margin: 0 0 6px; }
+
+.asr-text {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.asr-error {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #f5c2c2;
+  border-radius: 8px;
+  background: #fdecec;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.asr-error > button { margin-left: 8px; }
+
+/* 转写中那个占位也用 button 的样式，但它不是 button（点不了） */
+button.disabled, .ghost.disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 /* ────────────────────────── 空态 / 加载 ────────────────────────── */
 
 .empty { padding: 40px 0; text-align: center; color: var(--muted); }

@@ -76,16 +76,62 @@
           {{ turn.error }}
         </div>
 
+        <!-- 两种输入方式，每题都能选。语音的转写结果是**只读**的：这个功能的目的是
+             练口语表达，能改的话人就会边想边改稿，练的就不是表达了。要改就重录 -->
         <div v-if="!turn.finished" class="actions">
-          <textarea v-model="answer" :disabled="submitting"
-                    placeholder="写下你的回答…（Ctrl+Enter 提交）"
-                    @keydown.ctrl.enter="submit"></textarea>
-          <div class="actions">
-            <button :disabled="submitting || !answer.trim()" @click="submit">
-              <span v-if="submitting" class="spinner"></span>
-              {{ submitting ? '面试官正在评估…' : '提交回答' }}
-            </button>
+          <div class="asr-bar" v-if="asrAvailable && asrMode === 'voice'">
+            <button class="ghost small" v-if="asrState === 'idle' || asrState === 'done'"
+                    :disabled="submitting" @click="asrStart">🎤 录音</button>
+            <button class="ghost small danger" v-else-if="asrState === 'recording'"
+                    @click="asrStop">⏹ 停止 {{ asrSeconds }}s</button>
+            <span class="ghost small disabled" v-else>
+              <span class="spinner"></span> 转写中…
+            </span>
+
+            <span class="asr-meter" v-if="asrState === 'recording'">
+              <i :style="{ width: (asrLevel * 100) + '%' }"></i>
+            </span>
+            <span class="asr-hint" v-if="asrState === 'recording'">
+              最长 {{ asrMaxSeconds }} 秒，到点自动停
+            </span>
+
+            <button class="ghost small asr-switch" v-if="!submitting && asrState !== 'recording'"
+                    @click="asrUseTyping">改用打字</button>
           </div>
+
+          <!-- 每条错误都给出路：不能让用户卡在一个坏掉的按钮上 -->
+          <p class="asr-error" v-if="asrError">
+            {{ asrError }}
+            <button class="ghost small" @click="asrUseTyping">改用打字</button>
+          </p>
+
+          <div class="asr-result" v-if="asrMode === 'voice' && asrState === 'done'">
+            <p class="asr-hint">转写结果（只能重录，不能改）</p>
+            <p class="asr-text">{{ asrText }}</p>
+            <div class="actions">
+              <button class="ghost small" @click="asrStart">重录</button>
+              <button :disabled="submitting" @click="submit">
+                <span v-if="submitting" class="spinner"></span>
+                {{ submitting ? '面试官正在评估…' : '提交这个回答' }}
+              </button>
+            </div>
+          </div>
+
+          <template v-if="asrMode === 'typing' || !asrAvailable">
+            <div class="asr-bar" v-if="asrAvailable">
+              <button class="ghost small" @click="asrUseVoice">🎤 改用语音</button>
+            </div>
+            <textarea v-model="answer" :disabled="submitting"
+                      placeholder="写下你的回答…（Ctrl+Enter 提交）"
+                      @keydown.ctrl.enter="submit"></textarea>
+            <div class="actions">
+              <button :disabled="submitting || !submitText" @click="submit">
+                <span v-if="submitting" class="spinner"></span>
+                {{ submitting ? '面试官正在评估…' : '提交回答' }}
+              </button>
+            </div>
+          </template>
+
           <p class="muted mt8" v-if="submitting">
             AI 服务繁忙时会自动重试，最长约 1.5 分钟，请勿刷新页面。
           </p>
@@ -102,6 +148,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
 <script src="js/app.js"></script>
+<script src="js/asr.js"></script>
 <script>
   const { createApp } = Vue;
 
@@ -114,7 +161,8 @@
         submitting: false,
         booting: true,
         DIMENSION_LABELS,
-        NEXT_ACTION_LABELS
+        NEXT_ACTION_LABELS,
+        ...asrData()
       };
     },
     computed: {
@@ -129,7 +177,9 @@
       showPrior() {
         const t = this.turn;
         return !!(t && t.lastSeq && t.lastQuestion && t.lastQuestion !== t.question);
-      }
+      },
+      // 该提交哪个字符串。逻辑在 asr.js 里，这里只是把 data 和它接上
+      submitText() { return this.asrSubmitText(); }
     },
     async mounted() {
       if (!requireLogin()) return;
@@ -150,8 +200,12 @@
         toast(e.message, true);
         this.booting = false;
       }
+
+      // 拉一次 /status 决定要不要显示麦克风。拿不到就当没有语音，不影响打字
+      this.asrInit();
     },
     methods: {
+      ...ASR_METHODS,
       fmtScore,
       scoreClass,
       apply(turn) {
@@ -162,15 +216,17 @@
         }
       },
       async submit() {
-        if (this.submitting || !this.answer.trim()) return;
+        const submitted = this.submitText;
+        if (this.submitting || !submitted) return;
         this.submitting = true;
-        const submitted = this.answer.trim();
         try {
           const turn = await api('/api/interview/' + this.recordId + '/answer', {
             method: 'POST',
             body: { answer: submitted }
           });
           this.answer = '';
+          // 语音状态也要清，否则下一题还挂着上一题的转写
+          this.asrReset();
           this.apply(turn);
         } catch (e) {
           toast(e.message, true);
