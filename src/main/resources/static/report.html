@@ -43,6 +43,11 @@
           覆盖 {{ coveredTopicCount }} 个话题 ·
           {{ detail.status === 'finished' ? '已结束' : '进行中' }}
         </p>
+        <div class="mt8" style="display:flex;justify-content:flex-end">
+          <button class="ghost small" @click="exportMarkdown">
+            导出 Markdown（问题 + 回答 + 评语 + 决策）
+          </button>
+        </div>
         <!-- 提前结束或引擎跑挂时，这里说明原因 -->
         <div v-if="detail.error" class="feedback mt16"
              style="background:#fdecec;border-color:#f5c2c2">
@@ -199,6 +204,16 @@
       fmtScore,
       scoreClass,
       renderMarkdown,
+      // buildReportMarkdown / downloadTextFile / safeFileName 是 app.js 里的全局函数，
+      // 直接调用即可，不用再往 data/methods 上挂一份
+      exportMarkdown() {
+        if (!this.detail) return;
+        const d = this.detail;
+        const stamp = fmtTime(d.createdAt).replace(/[-: ]/g, '');
+        const name = safeFileName(`面试复盘-${d.position || '技术面试'}-${stamp}`);
+        downloadTextFile(name + '.md', buildReportMarkdown(d));
+        toast('已导出 ' + name + '.md');
+      },
       routingTagClass(action) {
         if (action === 'deepen') return 'success';
         if (action === 'lower') return 'warning';

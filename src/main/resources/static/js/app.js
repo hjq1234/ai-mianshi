@@ -169,6 +169,90 @@ const DIMENSION_LABELS = {
   problemSolving: '解题思路'
 };
 
+/* ────────────────────────── 复盘导出 ────────────────────────── */
+
+/** Windows 文件名里 / \ : * ? " < > | 都是非法的，统一换掉 */
+function safeFileName(name) {
+  const cleaned = String(name).replace(/[\\/:*?"<>|]/g, '-').trim();
+  return cleaned || 'export';
+}
+
+/** 表格单元格：| 会把表格撑破，换行会把一行拆成两行 */
+function mdCell(text) {
+  return String(text === null || text === undefined ? '' : text)
+    .replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+/**
+ * 复盘详情 → Markdown 全文。
+ *
+ * 数据全部来自 /api/interview/{id}/detail，所以导出不需要新接口，
+ * 也就不存在「<a href> 下载链接带不上 Authorization 头」这个问题。
+ */
+function buildReportMarkdown(detail) {
+  const action = a => NEXT_ACTION_LABELS[a] || a || '-';
+  const dialogues = detail.dialogues || [];
+  const topics = [...new Set(dialogues.map(d => d.topic).filter(Boolean))];
+  const L = [];
+
+  L.push(`# ${detail.position || '技术面试'} · 面试复盘`, '');
+  L.push(`- 公司：${detail.company || '-'}`);
+  L.push(`- 方向：${detail.domain || '-'}`);
+  L.push(`- 难度：${detail.difficulty || '-'}`);
+  L.push(`- 时间：${fmtTime(detail.createdAt)}`);
+  L.push(`- 状态：${detail.status === 'finished' ? '已结束' : '进行中'}`);
+  L.push(`- 总分：${fmtScore(detail.totalScore)} / 10（共 ${dialogues.length} 题）`);
+  L.push(`- 覆盖话题：${topics.join('、') || '-'}`);
+  if (detail.error) L.push(`- 备注：${detail.error}`);
+  L.push('');
+
+  // 决策链：一眼看清每题走的是哪个分支、换到哪儿去了
+  L.push('## 决策链', '');
+  L.push('| 题号 | 话题 | 难度 | 得分 | 图的分支 | 说明 |');
+  L.push('|---|---|---|---|---|---|');
+  for (const d of dialogues) {
+    const note = (d.comment || '') + (d.nextTopic ? `（换到：${d.nextTopic}）` : '');
+    L.push(`| ${d.seq} | ${mdCell(d.topic || '-')} | ${mdCell(d.difficulty || '-')} `
+         + `| ${fmtScore(d.score)} | ${action(d.nextAction)} | ${mdCell(note)} |`);
+  }
+  L.push('');
+
+  L.push('## 逐题详情', '');
+  for (const d of dialogues) {
+    L.push(`### 第 ${d.seq} 题 · ${d.topic || '综合'} · ${d.difficulty || '-'} · ${fmtScore(d.score)} 分`, '');
+    L.push(`**问：** ${d.question || '-'}`, '');
+    L.push('**答：**', '', (d.answer || '（未作答）').trim(), '');
+    if (d.comment) L.push(`**评语：** ${d.comment}`, '');
+    const dims = d.dimensions || {};
+    const keys = Object.keys(dims);
+    if (keys.length) {
+      // 没有项目背景的题 practice 是 null，这里显示成 '-'，不是 0 分
+      L.push('**五维：** ' + keys
+        .map(k => `${DIMENSION_LABELS[k] || k} ${fmtScore(dims[k])}`).join(' · '), '');
+    }
+    L.push(`**下一步：** → ${action(d.nextAction)}`
+      + (d.nextTopic ? `（换到：${d.nextTopic}）` : ''), '');
+  }
+
+  L.push('## AI 综合报告', '');
+  L.push(detail.report || '（这场面试还没结束，没有综合报告）', '');
+  L.push('---', `导出时间：${fmtTime(Date.now())}`);
+  return L.join('\n');
+}
+
+/** Blob + <a download>。不用 window.open：那样指定不了文件名，也绕不开鉴权头的问题 */
+function downloadTextFile(filename, text, mime = 'text/markdown;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 立刻 revoke 在部分浏览器上会打断下载，等一拍再释放
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const NEXT_ACTION_LABELS = {
   deepen: '深入追问',
   continue: '换个角度',
