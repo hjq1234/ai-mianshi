@@ -55,6 +55,40 @@
         </div>
       </div>
 
+      <!-- 图表区。雷达和趋势并排，窄屏自动堆叠 -->
+      <div class="chart-row">
+        <div class="card">
+          <h2>能力雷达图</h2>
+          <p class="sub">本场五维均分，和历史对比。</p>
+          <div id="chart-radar" class="chart"></div>
+          <p class="muted" v-if="practiceMissing">本场没有实践分（纯概念题不打分），图中按 0 显示</p>
+          <p class="muted" v-else-if="statsFailed">历史均分没取到，只画本场那一条</p>
+          <p class="muted" v-else-if="!stats || !stats.finishedCount">还没有答过题的场次，只画本场那一条</p>
+        </div>
+
+        <div class="card">
+          <h2>分数趋势</h2>
+          <p class="sub">每题得分；背景色带是话题分段，虚线是本场均分。</p>
+          <div id="chart-trend" class="chart"></div>
+        </div>
+      </div>
+
+      <!-- 图执行路径：泳道。故意不用 ECharts，见 charts.js 里的说明 -->
+      <div class="card">
+        <h2>图执行路径</h2>
+        <p class="sub">
+          引擎每一轮实际走过的节点，最后一步是图做的分支决策。
+          整场用时约 {{ durationMinutes }} 分钟（含你作答的时间，所以比色块加起来长）。
+        </p>
+        <div id="chart-swimlane" v-html="swimlaneHtml"></div>
+      </div>
+
+      <div class="card">
+        <h2>话题覆盖度</h2>
+        <p class="sub">每个话题问了几题、平均多少分。</p>
+        <div id="chart-topics" class="chart"></div>
+      </div>
+
       <!-- 决策链：图是怎么走的 -->
       <div class="card">
         <h2>图的分支决策链</h2>
@@ -124,42 +158,14 @@
         <div class="report" v-if="detail.report" v-html="renderMarkdown(detail.report)"></div>
         <div v-else class="muted">这场面试还没结束，结束之后才会有综合报告。</div>
       </div>
-
-      <!-- 图执行轨迹（默认折叠，10 题能有一两百条） -->
-      <div class="card">
-        <h2 style="cursor:pointer" @click="showTrace = !showTrace">
-          图执行轨迹（{{ detail.traces.length }} 条）{{ showTrace ? '▾' : '▸' }}
-        </h2>
-        <p class="sub">
-          引擎每进出一个节点、每做一次分支决策都会记一条。二期用它画路径可视化图。
-        </p>
-        <table v-if="showTrace">
-          <thead>
-            <tr><th>#</th><th>轮次</th><th>节点</th><th>类型</th><th>去向</th><th>耗时</th><th>状态</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="t in detail.traces" :key="t.seq">
-              <td>{{ t.seq }}</td>
-              <td>{{ t.round }}</td>
-              <td>{{ t.nodeName }}</td>
-              <td><span class="tag">{{ t.nodeType }}</span></td>
-              <td>{{ t.toNode || '-' }}</td>
-              <td class="muted">{{ t.costMs }} ms</td>
-              <td>
-                <span v-if="t.status === 'error'" class="tag" style="color:var(--danger)">error</span>
-                <span v-else-if="t.status === 'suspend'" class="tag warning">挂起</span>
-                <span v-else class="muted">ok</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
     </template>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
 <script src="js/app.js"></script>
+<script src="js/charts.js"></script>
 <script>
   const { createApp } = Vue;
 
@@ -168,8 +174,12 @@
       return {
         topbar: topbarHtml('history.html'),
         detail: null,
+        // 历史均分。取不到时保持 null：雷达图只画本场，其余三张图不受影响
+        stats: null,
+        statsFailed: false,
+        // 泳道图是拼出来的 HTML 串（不是 ECharts），所以放 data 里给 v-html
+        swimlaneHtml: '',
         loading: true,
-        showTrace: false,
         DIMENSION_LABELS,
         NEXT_ACTION_LABELS
       };
@@ -178,6 +188,18 @@
       coveredTopicCount() {
         if (!this.detail) return 0;
         return new Set(this.detail.dialogues.map(d => d.topic).filter(Boolean)).size;
+      },
+      // 整场用时用记录的时间跨度，不是 Σ cost_ms——作答的等待时间没有 trace
+      durationMinutes() {
+        const d = this.detail;
+        if (!d || !d.createdAt || !d.updatedAt) return '-';
+        return Math.max(1, Math.round((d.updatedAt - d.createdAt) / 60000));
+      },
+      // 本场一道题都没打出实践分。雷达图按 0 画了，得说明一句，
+      // 不然看图的人会以为「实践能力是 0 分」
+      practiceMissing() {
+        const list = this.detail ? this.detail.dialogues : [];
+        return list.length > 0 && !list.some(d => d.dimensions && d.dimensions.practice != null);
       }
     },
     async mounted() {
@@ -191,12 +213,27 @@
 
       fillNickname();
       try {
-        // 复盘只用这一个接口：逐题评分 + 决策链 + 轨迹 + 报告都在里面
+        // 复盘只用这一个接口：逐题评分 + 决策链 + 轨迹 + 五维均分都在里面
         this.detail = await api('/api/interview/' + id + '/detail');
       } catch (e) {
         toast(e.message, true);
-      } finally {
-        this.loading = false;
+      }
+
+      // 历史均分单独拿，失败也只降级雷达图，不能让整页打不开
+      try {
+        this.stats = await api('/api/interview/stats');
+      } catch (e) {
+        this.statsFailed = true;
+      }
+
+      this.loading = false;
+      if (this.detail) {
+        this.swimlaneHtml = traceSwimlaneHtml(this.detail.traces);
+        // 图表容器在 v-else 模板里，得等这一轮 DOM 更新完才有元素可 init
+        await this.$nextTick();
+        this.drawCharts();
+        // ECharts 不会自己跟着容器变宽，窗口一变要重新量
+        window.addEventListener('resize', this.resizeCharts);
       }
     },
     methods: {
@@ -204,6 +241,22 @@
       fmtScore,
       scoreClass,
       renderMarkdown,
+      drawCharts() {
+        renderRadar(document.getElementById('chart-radar'), {
+          current: this.detail.dimensionAverages,
+          history: this.stats ? this.stats.dimensions : null,
+          historyCount: this.stats ? this.stats.finishedCount : 0
+        });
+        renderScoreTrend(document.getElementById('chart-trend'), this.detail.dialogues);
+        renderTopicCoverage(document.getElementById('chart-topics'), this.detail.dialogues);
+      },
+      resizeCharts() {
+        if (typeof echarts === 'undefined') return;
+        document.querySelectorAll('.chart').forEach(el => {
+          const instance = echarts.getInstanceByDom(el);
+          if (instance) instance.resize();
+        });
+      },
       // buildReportMarkdown / downloadTextFile / safeFileName 是 app.js 里的全局函数，
       // 直接调用即可，不用再往 data/methods 上挂一份
       exportMarkdown() {

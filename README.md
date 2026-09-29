@@ -75,7 +75,8 @@ export DEEPSEEK_API_KEY=sk-你的key
 3. 等 5-15 秒出第一题，回答后提交。上一轮的题目、你的回答、评分、评语会收进
    题目上方一个默认折叠的「上一轮回顾 ▸」，点开才展开
 4. 中途可以直接关掉页面 —— 回「面试记录」点「继续面试」能接着答
-5. 答完 10 题或点「结束面试」→ 自动跳复盘页，右上角可以导出 Markdown
+5. 答完 10 题或点「结束面试」→ 自动跳复盘页：四张图（能力雷达 / 分数趋势 /
+   图执行路径 / 话题覆盖度）+ 决策链表 + 逐题详情，右上角可以导出 Markdown
 
 ### 5. 看日志
 
@@ -106,6 +107,7 @@ HTTP POST /api/interview/1/answer → 200 | 8421 ms | user=1
 | PDF | PDFBox 3.0.4 | 简历解析 |
 | 密码 | `spring-security-crypto` | 只要 BCrypt 一个类，不引 Spring Security 全家桶 |
 | 前端 | Vue 3 CDN 版 | 无 node/npm 构建链，一个 `mvn package` 出一个 jar |
+| 图表 | ECharts 5.6.0（CDN） | 复盘页三张坐标图。锁 5.6.0 而不是 6.x：只用 radar/line/bar，要的是 API 稳定 |
 
 ## 目录结构
 
@@ -122,6 +124,9 @@ src/main/resources/
 ├── schema.sql      建表脚本，启动自动执行
 ├── prompts/        9 个提示词（改提示词不用改 Java）
 └── static/         6 个页面
+    ├── js/app.js     全局工具 + 复盘导出
+    ├── js/charts.js  复盘页四张图（三张 ECharts + 泳道图拼 HTML）
+    └── css/app.css
 ```
 
 ## 数据库
@@ -169,15 +174,37 @@ POST   /api/interview/{id}/finish   用户主动结束
 POST   /api/interview/{id}/resume   从游标继续，不需要新答案
 GET    /api/interview/{id}/state    刷新页面用，不推进图
 GET    /api/interview/list
-GET    /api/interview/{id}/detail   复盘详情
+GET    /api/interview/{id}/detail   复盘详情（含 dimensionAverages 本场五维均分）
 GET    /api/interview/{id}/trace    节点轨迹
+GET    /api/interview/stats         历史五维均分，给雷达图做对比
 ```
 
 除 `/api/auth/login` 外全部要 `Authorization: Bearer <token>`。
 
+`/stats` 刻意**不带 `{id}`**：它是「所有已结束场次」的聚合，不属于任何一场。
+它只统计**真答过题**的场次（`EXISTS` 那道判断），否则一次启动就失败的空场次会
+把「历史均分（N 场）」的 N 撑大。聚合规则（某个维度全场都是 null 就不进分母）
+只有 `InterviewStats` 一份实现，`/stats` 和 `detail.dimensionAverages` 共用，
+前端不自己算。
+
 复盘页右上角的「导出 Markdown」是纯前端 Blob 下载，**没有新增接口**：
 `detail` 已经返回了题目、回答、评语、五维、分支决策和综合报告。
 不用 `<a href>` 直接指向接口，是因为那样带不上 `Authorization` 头。
+
+### 复盘页的四张图
+
+| 图 | 画什么 | 为什么这么画 |
+|---|---|---|
+| 能力雷达图 | 本场五维均分 + 历史均分 | 两条多边形才看得出「这场比平时强还是弱」。本场没有的维度（纯概念题的 `practice`）按 0 画并另起一行小字说明，不假装有分 |
+| 分数趋势 | 逐题得分折线 + 本场均分虚线 + 话题色带 | 色带按「连续同话题」分段，「第 3~5 题都在 JVM 上、第 6 题开始聊并发」一眼可见 |
+| 图执行路径 | 每轮一行的泳道时间线 | 引擎跑 10 题有 60+ 条 trace，画成节点图没法看（大多是一条 10 次的循环）。泳道色块宽度 = 该节点耗时，**不含你作答的等待时间**——等待期间没有 trace 记录，所以整场的「用时」用的是记录的时间跨度 |
+| 话题覆盖度 | 每个话题几题、均分多少 | 看「问得多但都答得差」这种分布 |
+
+泳道图**故意不用 ECharts**：它本质是「表格 + 色块」，用 ECharts 的 custom series
+要写一整套 `renderItem` 坐标数学，而 flex + 百分比宽度二十行就够了。
+
+三张 ECharts 图各自 `try/catch`，任何一张挂了只把容器换成一行说明，不牵连整页；
+`echarts` 本身没加载出来（CDN 打不开）同理。`/stats` 取不到时只降级雷达图的历史那条线。
 
 ## 几个已知的取舍
 
@@ -188,13 +215,24 @@ GET    /api/interview/{id}/trace    节点轨迹
 | 实践维度可能是空的 | 纯概念题没有项目背景就不打分（页面显示 `-`），不凑一个中间分出来 |
 | 同一话题最多问 3 题 | `app.interview.max-follow-up`。问满强制换话题，不再「一直换个角度」换到题目重复 |
 | 出题失败 → 游标停在 `question` | 状态已落库，修好后调 `/resume` 就能接着跑 |
+| 图表依赖 CDN | ECharts 从 jsdelivr 引，离线环境下三张图会显示「图表库没加载出来」，页面其余部分照常 |
+| 泳道图在 40 题以上会变长 | 每轮一行、不做虚拟滚动。10 题的设计上限下没问题 |
 | 无流式输出 | 事件驱动架构的必然结果。要加就让 `/answer` 单独返回 SSE |
 | token 无法主动失效 | 登出只是前端删 token。单用户自用够用 |
-| 知识库只留接口不实现 | 一期 YAGNI，二期接国产 embedding API |
+| 知识库只留接口不实现 | 一期 YAGNI，见文末「还没做的」 |
 | 无注册流程 | 账号直接建库 |
 | 部署前必须改 `app.auth.secret` | 默认值是 `change-me-before-deploy-please`，不改等于谁都能签 token |
 
-## 二期计划
+## 二期（已完成）
 
-复盘页的雷达图、分数趋势图、图路径可视化、话题覆盖度。
-数据（五维评分、`t_graph_trace`）一期就已经采全了，二期只负责画。
+复盘页的雷达图、分数趋势图、图路径可视化（泳道时间线）、话题覆盖度。
+
+数据（五维评分、`t_graph_trace`）一期就已经采全了，所以二期**只加了一个接口**
+（`/api/interview/stats`，历史均分）和一个前端文件（`static/js/charts.js`），
+`graph/` 包一行没动。原设计里的「力导向节点图」换成泳道时间线，理由是拿真数据
+比过：一场 10 题就是 60+ 条 trace 的一条循环，力导向画出来是一团糊。
+
+## 还没做的
+
+- 嵌入知识库检索（`biz/knowledge` 只留了接口）
+- 流式输出（出题要等 5-15 秒，期间前端只能转圈）

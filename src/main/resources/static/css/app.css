@@ -301,3 +301,91 @@ details.prior .prior-body p { margin: 0; }
 .report h4 { font-size: 14px; }
 .report p { margin: 0 0 10px; }
 .report ul { margin: 0 0 10px; padding-left: 20px; }
+
+/* ────────────────────────── 复盘页图表 ────────────────────────── */
+
+/* ★ 必须给死高度：ECharts 在高度为 0 的容器里什么都不画，
+   表现和「白屏」一模一样，是这个库最常见的坑 */
+.chart { height: 260px; }
+
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.chart-row .card { margin-bottom: 16px; }
+
+@media (max-width: 880px) {
+  .chart-row { grid-template-columns: 1fr; }
+}
+
+/* 图表挂了或库没加载出来时的兜底，别留一块白 */
+.chart-fail { padding: 28px 0; text-align: center; color: var(--muted); }
+
+/* ── 图执行路径（泳道时间线） ── */
+
+.swim-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.swim-legend .muted { margin-left: auto; }
+
+.swim-key {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: #eef2f7;
+}
+
+.swim-key.suspend { background: #fdf3e3; border-color: #f6e0bd; }
+.swim-key.branch { background: #e8f7ee; border-color: #c6ebd5; }
+.swim-key.error { background: #fdecec; border-color: #f5c2c2; }
+
+.swim-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.swim-round {
+  flex: 0 0 52px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.swim-track { flex: 1; display: flex; gap: 2px; min-width: 0; }
+
+.swim-block {
+  height: 22px;
+  line-height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid #dde3ea;
+  background: #eef2f7;
+  color: #4b5563;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 耗时极小的节点宽度会接近 0，给个下限让标签还读得出来 */
+  min-width: 34px;
+}
+
+.swim-block.suspend { background: #fdf3e3; border-color: #f6e0bd; color: var(--warning); }
+.swim-block.branch { background: #e8f7ee; border-color: #c6ebd5; color: var(--success); }
+.swim-block.error { background: #fdecec; border-color: #f5c2c2; color: var(--danger); }
+
+.swim-cost {
+  flex: 0 0 44px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.swim-branch { flex: 0 0 96px; color: var(--muted); font-size: 12px; }

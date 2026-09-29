@@ -3,6 +3,7 @@ package com.ke.nhservice.aimianshi.controller;
 import com.ke.nhservice.aimianshi.biz.interview.Dialogue;
 import com.ke.nhservice.aimianshi.biz.interview.InterviewEngine;
 import com.ke.nhservice.aimianshi.biz.interview.InterviewState;
+import com.ke.nhservice.aimianshi.biz.interview.InterviewStats;
 import com.ke.nhservice.aimianshi.biz.interview.RecordRow;
 import com.ke.nhservice.aimianshi.biz.interview.TraceRow;
 import com.ke.nhservice.aimianshi.common.auth.UserContext;
@@ -103,7 +104,8 @@ public class InterviewController {
         Long userId = UserContext.get();
         RecordRow row = engine.requireRecord(userId, id);
 
-        List<InterviewDetailVO.DialogueVO> dialogues = engine.dialogues(id).stream()
+        List<Dialogue> raw = engine.dialogues(id);
+        List<InterviewDetailVO.DialogueVO> dialogues = raw.stream()
                 .map(InterviewController::toDialogueVO)
                 .toList();
         List<InterviewDetailVO.TraceVO> traces = engine.traces(id).stream()
@@ -113,10 +115,15 @@ public class InterviewController {
         // error 从 state_json 里取：EndNode 把「为什么提前结束」写在了那里
         InterviewState state = engine.loadState(userId, id);
 
+        // 本场五维均分。finishedCount 传 1 只是占位（那个字段是给「历史几场」用的），
+        // 这里要的是 dimensions；规则和 /stats 共用同一种算法，不存在两份实现
+        Map<String, Double> averages = InterviewStats.of(
+                raw.isEmpty() ? 0 : 1, raw).dimensions();
+
         return ApiResponse.ok(new InterviewDetailVO(
                 row.id(), row.position(), row.company(), row.domain(), row.difficulty(),
                 row.status(), row.totalScore(), row.report(), state.getError(),
-                row.createdAt(), row.updatedAt(), dialogues, traces));
+                row.createdAt(), row.updatedAt(), averages, dialogues, traces));
     }
 
     @GetMapping("/{id}/trace")

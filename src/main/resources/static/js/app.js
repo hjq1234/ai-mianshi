@@ -206,6 +206,40 @@ function buildReportMarkdown(detail) {
   if (detail.error) L.push(`- 备注：${detail.error}`);
   L.push('');
 
+  // 数据概览：复盘页上那四张图导不出来，所以把图上的数字用文字带一份，
+  // 否则导出文件里就少了「用时多久、哪个话题最弱」这些一眼能看出的事
+  L.push('## 数据概览', '');
+  const minutes = detail.createdAt && detail.updatedAt
+    ? Math.max(1, Math.round((detail.updatedAt - detail.createdAt) / 60000)) : null;
+  L.push(`- 用时：${minutes === null ? '-' : '约 ' + minutes + ' 分钟'}（含作答时间）`);
+
+  const averages = detail.dimensionAverages || {};
+  const dimKeys = Object.keys(averages);
+  // 实践分可能是空的（纯概念题不打分），空的时候说明一句，别让人读成 0 分
+  const dimText = dimKeys.length
+    ? dimKeys.map(k => `${DIMENSION_LABELS[k] || k} ${fmtScore(averages[k])}`).join(' · ')
+      + (averages.practice === undefined ? '（实践维度本场没有数据）' : '')
+    : '-';
+  L.push(`- 本场五维均分：${dimText}`);
+
+  const byTopic = new Map();
+  for (const d of dialogues) {
+    const topic = d.topic || '综合';
+    const row = byTopic.get(topic) || { count: 0, sum: 0, scored: 0 };
+    row.count++;
+    if (d.score !== null && d.score !== undefined) {
+      row.sum += d.score;
+      row.scored++;
+    }
+    byTopic.set(topic, row);
+  }
+  L.push('- 话题分布：' + ([...byTopic.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([topic, r]) => `${topic} ${r.count} 题`
+      + (r.scored ? `（均分 ${fmtScore(r.sum / r.scored)}）` : ''))
+    .join('、') || '-'));
+  L.push('');
+
   // 决策链：一眼看清每题走的是哪个分支、换到哪儿去了
   L.push('## 决策链', '');
   L.push('| 题号 | 话题 | 难度 | 得分 | 图的分支 | 说明 |');
