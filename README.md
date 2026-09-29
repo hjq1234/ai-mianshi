@@ -145,11 +145,11 @@ sherpa-onnx 没发 Maven 中央仓库，发在 JitPack；而本机 `settings.xml
 
 | | 离线（录完再转） | 流式（边说边出字） |
 |---|---|---|
-| 模型 | SenseVoiceSmall int8 | streaming zipformer zh-14M int8 |
-| 大小 | **228 MB**（`model.int8.onnx` + `tokens.txt`） | **24 MB**（encoder / decoder / joiner 三个 `.onnx` + `tokens.txt`） |
+| 模型 | SenseVoiceSmall int8 | streaming zipformer **zh-int8-2025-06-30** |
+| 大小 | **228 MB**（`model.int8.onnx` + `tokens.txt`） | **161 MB**（encoder / decoder / joiner 三个 `.onnx` + `tokens.txt`） |
 | 出字时机 | 停止录音后一次性出 | 每 100ms 一片，边说边出 |
-| 标点 / 数字规整 | 有（模型自带 ITN） | **没有**，标点和「二零二五 → 2025」都要自己补 |
-| 识别准确率 | 更好 | 明显差一档（14M 参数的模型） |
+| 标点 / 数字规整 | 有（词表里就有 `，。？！`，且自带 ITN） | **没有**，且换流式模型也没有（见下面「已知不完美」） |
+| 识别准确率 | 更好 | 差一档。但流式这边已经换成 icefall 的 **large** 模型（多中文数据集训练），比早先那个 14M 的强 |
 | 用途 | 想一次拿到干净的整段 | 想看见字在长、长回答不用等 |
 
 ```bash
@@ -157,26 +157,30 @@ sherpa-onnx 没发 Maven 中央仓库，发在 JitPack；而本机 `settings.xml
 # https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
 → 只要 model.int8.onnx（228.2 MB）+ tokens.txt（0.3 MB）
 
-# 流式（约 24 MB）。解压后从里面的 int8 那套挑四个文件出来
-# https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2
-→ encoder-epoch-99-avg-1.int8.onnx（21.6 MB）
-  decoder-epoch-99-avg-1.int8.onnx（ 1.89 MB）
-  joiner-epoch-99-avg-1.int8.onnx（ 1.80 MB）
-  tokens.txt（48.7 KB）
+# 流式（约 127 MB）。整个解压，里面四个文件都要
+# https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2
+→ encoder.int8.onnx（153.7 MB）
+  decoder.onnx      （  4.9 MB，发布包里这个本来就是 fp32）
+  joiner.int8.onnx  （  1.8 MB）
+  tokens.txt        （ 2002 个 token，字节级 BPE）
 ```
+
+早先用的是 `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（24 MB，
+`*-epoch-99-avg-1.int8.onnx` 那套文件名）。**两个发布包的文件名规则完全不同**，
+换模型时 `AsrProperties.Stream` 里那四个文件名要一起动。
 
 **3. 指过去**
 
 ```bash
-export APP_ASR_MODEL_DIR=D:/models/sense-voice            # 离线
-export APP_ASR_STREAM_MODEL_DIR=D:/models/streaming-zh-14M   # 流式
+export APP_ASR_MODEL_DIR=D:/models/sense-voice                                          # 离线
+export APP_ASR_STREAM_MODEL_DIR=D:/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30  # 流式
 ```
 
 两个变量相互独立，**只下一个是很正常的状态**：另一个对应的选项在页面里是灰的，
 答题照常。两个都没设时 `/api/asr/status` 返 `available:false` + `streamAvailable:false`，
 麦克风按钮和模式下拉都不显示，只剩打字。
 
-> 文件名（`encoder-epoch-99-avg-1.int8.onnx` 这几个）**不在 `application.yml` 里**，
+> 文件名（`encoder.int8.onnx` 这几个）**不在 `application.yml` 里**，
 > 是 `AsrProperties.Stream` 的字段默认值。目录跟机器绑定、文件名跟模型绑定 ——
 > 而 yml 因为里面有本地的 `base-url` / `model` 改动**没有提交**，文件名塞进去的话，
 > 换台机器的人下了模型、环境变量也设了，还是会看到「流式模型文件不存在」。
@@ -208,9 +212,22 @@ export APP_ASR_STREAM_MODEL_DIR=D:/models/streaming-zh-14M   # 流式
 **为什么要分片而不是 WebSocket**：不用引任何依赖，鉴权（`Authorization` 头）和访问日志
 白捡 —— 现有的 `RequestLogFilter` 直接就能看见每个分片。单用户下分片的开销可以忽略。
 
-**已知不完美**：流式那条**没有标点**，也**不做数字规整**（14M 的小模型没带 ITN）。
-识别准确率也比离线那套差一档。要标点的话得再挂一个 `OfflinePunctuation` 模型按定稿句子补，
-那是另一件事。
+**已知不完美**：流式那条**没有标点**，也**不做数字规整**，识别准确率还比离线差一档。
+
+没有标点不是「模型小、猜不准标点」，是**词表里压根没有标点这个字**。查过现在这个模型的
+`tokens.txt`：2002 个 token，是字节级 BPE（`<blk>` / `<sos/eos>` / `<unk>` 加
+`<0x00>`…`<0xFF>` 那些字节），`，。？！、；：` 和 `,.?;:` **一个都没有**。
+模型的输出是「从词表里挑 token」，词表里没有的东西它**结构上就吐不出来**。
+（离线那套的 `tokens.txt` 有 25055 个 token，`、。「」！，：；？` 都在里面 —— 所以它有标点。）
+
+而且**换流式模型也解决不了**：顺手查了另外两个流式模型的词表，
+`sherpa-onnx-streaming-zipformer-zh-2025-06-30`（2025 年最新的中文流式）2002 个 token
+零标点，`streaming-paraformer-bilingual-zh-en` 8404 个 token 里只有一个 `.`（英文缩写点）。
+原因是标点要判断「这句话说完了」，必须**往右看**，而流式模型被设计成只看左边加很短的
+右侧上下文 —— 它连句号该放哪都无从判断。流式 ASR 吐标点这件事本来就得靠后处理。
+
+所以补标点的路只有一条：在**定稿的整句**上再挂一个 `OfflinePunctuation` 模型
+（jar 里有这个类，流式那条已经有「定稿」这个时机了，正好接）。那是另一件事。
 
 ## 技术栈
 
@@ -225,7 +242,7 @@ export APP_ASR_STREAM_MODEL_DIR=D:/models/streaming-zh-14M   # 流式
 | 密码 | `spring-security-crypto` | 只要 BCrypt 一个类，不引 Spring Security 全家桶 |
 | 前端 | Vue 3 CDN 版 | 无 node/npm 构建链，一个 `mvn package` 出一个 jar |
 | 图表 | ECharts 5.6.0（CDN） | 复盘页三张坐标图。锁 5.6.0 而不是 6.x：只用 radar/line/bar，要的是 API 稳定 |
-| 语音识别 | sherpa-onnx + SenseVoiceSmall int8（离线）/ streaming zipformer zh-14M（流式） | 本地跑，不联网、音频不出机器；一个 jar 带两套 API（`OfflineRecognizer` / `OnlineRecognizer`），不需要 Python 进程 |
+| 语音识别 | sherpa-onnx + SenseVoiceSmall int8（离线）/ streaming zipformer zh-int8-2025-06-30（流式） | 本地跑，不联网、音频不出机器；一个 jar 带两套 API（`OfflineRecognizer` / `OnlineRecognizer`），不需要 Python 进程 |
 
 ## 目录结构
 
@@ -363,9 +380,9 @@ POST   /api/asr/stream/stop         流式：结束会话 → {finalText}（最�
 | 泳道图在 40 题以上会变长 | 每轮一行、不做虚拟滚动。10 题的设计上限下没问题 |
 | 无流式输出 | 事件驱动架构的必然结果。要加就让 `/answer` 单独返回 SSE |
 | 语音依赖两个不在中央仓库的 jar | 换机器 / 清了本地仓库要重跑两次 `install:install-file`，仓库里没有东西记录这一步 |
-| 两套模型都不进仓库（228 MB + 24 MB） | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
-| 流式那条**没有标点、不做数字规整** | 14M 的小模型没带 ITN。补的话要在定稿句子上再挂一个 `OfflinePunctuation` 模型，是另一件事 |
-| 流式识别准确率比离线差一档 | 14M vs SenseVoiceSmall。要更准就把 `decoderFile` 换成 fp32 那个（7.5 MB，改 `AsrProperties.Stream` 一行） |
+| 两套模型都不进仓库（228 MB + 161 MB） | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
+| 流式那条**没有标点** | 不是模型不准，是词表里没有标点这类 token（换哪个流式模型都一样）。补的话要在定稿句子上再挂一个 `OfflinePunctuation` 模型，是另一件事 |
+| 流式识别准确率比离线差一档 | 流式模型看不到右侧上下文，这是它换不掉的代价。encoder 已经从 21 MB 换到 154 MB（large 模型），实时系数 0.11，还有很大余量可再换更大的 |
 | 流式会话最多同时 4 个，空闲 2 分钟回收 | `app.asr.stream.max-sessions` / `idle-seconds`。前端不正常退出（关标签页）时那次会话会挂到过期才回收，表现是「试了几次之后点麦克风说会话太多」——等两分钟，或者重启 |
 | `partial` 不进答题框，只在麦克风上方那行灰字里 | 它一直在被改写，写进框里会把你打的草稿反复搅乱、光标也没了 |
 | 只支持 Windows x64 | `pom.xml` 里写死了 `native-lib-win-x64`。换平台改那一行 artifactId 即可 |

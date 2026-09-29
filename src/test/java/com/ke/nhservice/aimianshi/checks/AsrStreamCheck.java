@@ -42,10 +42,10 @@ public class AsrStreamCheck {
 
     public static void main(String[] args) throws Exception {
         String modelDir = args.length > 0 ? args[0]
-                : "D:/models/streaming-zh-14M";
+                : "D:/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30";
         // 模型自带的测试音频。5.6 秒的中文，切成 100ms 一片正好 56 片
         String wav = args.length > 1 ? args[1]
-                : "D:/models/streaming-zh-14M/test_wavs/0.wav";
+                : "D:/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav";
 
         Path db = Path.of(System.getProperty("java.io.tmpdir"), "asrstream-" + System.nanoTime() + ".db");
         ConfigurableApplicationContext ctx = new SpringApplicationBuilder(AiMianshiApplication.class)
@@ -88,6 +88,12 @@ public class AsrStreamCheck {
             int firstTextAt = -1;
             String sawFinal = "";
             StringBuilder partials = new StringBuilder();
+            // 顺便量一次速度。理想指标是「实时系数」= 解码耗时 / 音频时长，
+            // 小于 1 才追得上说话速度。**光看能不能转出正确文本是看不出这件事的**：
+            // 跑不过实时时结果照样对，只是前端那行灰字越说越滞后，
+            // 而且分片队列会一直涨（前端是等一片回来才发下一片）。
+            // 换更大的模型（encoder 从 21 MB 涨到 154 MB 那次）风险全在这儿。
+            long feedStartedAt = System.nanoTime();
             for (int i = 0; i < total; i++) {
                 byte[] slice = Arrays.copyOfRange(pcm, i * chunkBytes, (i + 1) * chunkBytes);
                 String r = postRaw(http, "/api/asr/stream/chunk?sessionId=" + sid
@@ -109,6 +115,18 @@ public class AsrStreamCheck {
             check("★ **喂到一半（第 " + firstTextAt + " 片 / 共 " + total + " 片）就已经出字了**"
                             + " —— 这才叫流式。攒够整段再解码的话这里必然是 -1",
                     firstTextAt > 0 && firstTextAt < total / 2, "firstTextAt=" + firstTextAt);
+
+            // 实时系数。这条是**跑得比说话快吗**，不是「准不准」——
+            // 前端串行发片，追不上说话速度的话队列只涨不落，灰字会越来越滞后。
+            // 注意它含 HTTP 往返，所以是偏悲观的值（真机上还要留点余量给别的活儿）
+            double audioMs = pcm.length / 2.0 / 16000 * 1000;
+            double feedMs = (System.nanoTime() - feedStartedAt) / 1_000_000.0;
+            double rtf = feedMs / audioMs;
+            System.out.printf("速度: %d 片解码共 %.0f ms，音频本身 %.0f ms，实时系数 %.2f（含 HTTP 往返）%n",
+                    total, feedMs, audioMs, rtf);
+            check("★ 实时系数 < 1（" + String.format("%.2f", rtf) + "）—— 追得上说话速度，"
+                            + "否则灰字会越说越滞后且不报错",
+                    rtf < 1.0, "rtf=" + String.format("%.2f", rtf));
 
             String stopped = post(BASE, http, "/api/asr/stream/stop?sessionId=" + sid,
                     token, null, "application/json");

@@ -91,8 +91,18 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 ```
 
 `AsrStreamCheck` 验的是 `/api/asr/stream/*` 那三个接口。两个参数都能省，默认用
-`D:/models/streaming-zh-14M` 和它自带的 `test_wavs/0.wav`（流式模型的测试音频是配套的，
-出问题时不用先怀疑「是不是音频本来就不对」）。端口 18092 / 18093。
+`D:/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30` 和它自带的 `test_wavs/0.wav`
+（流式模型的测试音频是配套的，出问题时不用先怀疑「是不是音频本来就不对」）。端口 18092 / 18093。
+
+**换模型时两个参数都要给**：两个发布包的文件名规则完全不同（老的是 `encoder-epoch-99-avg-1.int8.onnx`，
+新的是 `encoder.int8.onnx`），只改 `model-dir` 会得到 `streamAvailable:false`。
+要在同一段音频上比两个模型，文件名的差异用环境变量盖住即可，不用改代码：
+
+```bash
+export APP_ASR_STREAM_ENCODER_FILE=encoder-epoch-99-avg-1.int8.onnx
+export APP_ASR_STREAM_DECODER_FILE=decoder-epoch-99-avg-1.int8.onnx
+export APP_ASR_STREAM_JOINER_FILE=joiner-epoch-99-avg-1.int8.onnx
+```
 
 它有一条断言是**整份检查的意义所在**：
 
@@ -102,6 +112,11 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 只有「喂到一半就有字」才证明它真是流式。另有一条反着来：说完灌 2 秒静音，
 `finalText` 要在**没调 stop 之前**就返回（那是「灰字行定稿后追加进框」依赖的路径，
 `chunk()` 里 `getResult` 和 `reset` 的顺序写反了的话这里会红，而别的断言全绿）。
+
+第三条是**实时系数**（解码耗时 ÷ 音频时长，要 < 1）。换了个大 7 倍的 encoder 之后
+这条才有意义：跑不过实时时**结果照样对**，只是前端那行灰字越说越滞后、分片队列只涨不落
+（前端是等一片回来才发下一片），而所有别的断言都是绿的。实测 14M 是 0.04、
+154 MB 的 large 是 0.11，含 HTTP 往返，余量很大。
 
 ---
 

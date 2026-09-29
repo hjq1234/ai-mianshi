@@ -104,13 +104,25 @@ public class AsrProperties {
 
         /** 模型目录，放仓库外。空 = 没配 → streamAvailable:false，页面不显示流式这个选项 */
         private String modelDir = "";
-        /** zipformer 是三段式的：encoder / decoder / joiner。三件套统一 int8，合计 24 MB。
-         *  识别不准时第一件事就是把 decoder 换成 fp32（decoder-epoch-99-avg-1.onnx），只改这一行 */
-        private String encoderFile = "encoder-epoch-99-avg-1.int8.onnx";
-        private String decoderFile = "decoder-epoch-99-avg-1.int8.onnx";
-        private String joinerFile = "joiner-epoch-99-avg-1.int8.onnx";
+        /**
+         * zipformer 是三段式的：encoder / decoder / joiner。
+         *
+         * 现在是 zh-int8-2025-06-30（icefall 的 multi-zh-hans **large** 模型，多中文数据集训练）：
+         *   encoder.int8.onnx 153.7 MB + decoder.onnx 4.9 MB（发布包里这个本来就是 fp32，
+         *   体积小、量化收益低，官方没出 int8 版）+ joiner.int8.onnx，目录合计 161 MB。
+         *
+         * 上一版是 zh-14M-2023-02-23（encoder/decoder/joiner 都叫 *-epoch-99-avg-1.*，合计 24 MB）。
+         * 换模型的时候**四个文件名都要动** —— 两个发布包的文件名规则完全不同，
+         * 只改 model-dir 会得到 streamAvailable:false「流式模型文件不存在」。
+         *
+         * 代价：encoder 大了 7 倍，CPU 上解码更慢。流式这条路是串行分片、必须**跑得比实时快**，
+         * 跑不过实时的表现是灰字越说越滞后（不报错），所以 AsrStreamCheck 里专门有一条量它的速度。
+         */
+        private String encoderFile = "encoder.int8.onnx";
+        private String decoderFile = "decoder.onnx";
+        private String joinerFile = "joiner.int8.onnx";
         private String tokensFile = "tokens.txt";
-        /** 解码线程数。流式是每 100ms 解一次，给 2 个够 */
+        /** 解码线程数。每 100ms 解一次，要给足；不够的话实时系数掉到 1 以上就是越说越滞后 */
         private int numThreads = 2;
         /** 会话空闲多久回收（秒）。不回收就是漏 native 内存 */
         private int idleSeconds = 120;
