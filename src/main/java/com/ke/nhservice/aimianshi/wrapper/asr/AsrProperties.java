@@ -9,8 +9,11 @@ import java.nio.file.Path;
  * 语音识别配置。默认值都是「没配也能起，只是语音不可用」——
  * 模型是 228 MB，绝大多数环境不会预置，不能因为它缺失就让整个应用起不来。
  *
- * 本地覆盖用环境变量，不动 application.yml：
- *   set APP_ASR_MODEL_DIR=D:/models/sense-voice
+ * 模型目录从 application.yml 的 app.asr.model-dir 读，那一行本身又是
+ * ${APP_ASR_MODEL_DIR:D:/models/sense-voice} 的形式，所以两种都能用：
+ *   IDEA 直接 Run（yml 里的默认值生效）／ set APP_ASR_MODEL_DIR=... （环境变量赢过 yml）
+ * 这里字段默认值留空是刻意的：yml 里那行才是「默认值」的唯一出处，
+ * 两边都写一个真实路径的话，改一处忘一处就会出现「yml 明明改了却不生效」
  */
 @Component
 @ConfigurationProperties(prefix = "app.asr")
@@ -23,8 +26,12 @@ public class AsrProperties {
     private String tokensFile = "tokens.txt";
     /** 解码线程数。一次只解一段音频，给 4 个足够（60 秒音频远低于 1 秒解完） */
     private int numThreads = 4;
-    /** 单次转写音频上限（秒）。16k 单声道 PCM16 是 32 KB/秒，120 秒 ≈ 3.8 MB */
-    private int maxSeconds = 120;
+    /**
+     * 单次转写音频上限（秒）。前端录音到点自动停，服务端拿它当守卫拒超长请求。
+     * 换算：16k 单声道 PCM16 是 32 KB/秒，所以上限秒数 × 32 ≈ 请求体 KB。
+     * 这个值前端**不自己写**，/api/asr/status 会带过去（见 AsrApiCheck）。
+     */
+    private int maxSeconds = 240;
     /** SenseVoice 支持 zh / en / ja / ko / yue。面试是中文，锁定 zh 免得短句被误判成英文 */
     private String language = "zh";
     /** 逆文本正则化：把「二零二五」写成「2025」。转写文本要喂给 LLM 评分，数字更好读 */

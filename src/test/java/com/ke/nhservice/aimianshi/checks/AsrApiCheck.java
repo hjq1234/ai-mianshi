@@ -75,9 +75,13 @@ public class AsrApiCheck {
             check("★ data.nativeVersion 非空（说明 native 库在 Spring Boot 里也加载上了）",
                     !extract(statusBody, "nativeVersion").isBlank(),
                     extract(statusBody, "nativeVersion"));
-            check("★ data.maxSeconds=120（前端录音上限就用这个值）",
-                    "120".equals(extract(statusBody, "maxSeconds")),
-                    extract(statusBody, "maxSeconds"));
+            // 上限不写死：这个字段的**意思**是「前端录音上限用服务端这个值」，
+            // 写死成具体数字等于把 app.asr.max-seconds 抄了一遍，改配置就假红。
+            // （实测过一次：120 改成 240 之后，下面「超上限」那条从 121 秒变成了合法长度，
+            // 服务端正常转写，断言却还在等「音频太长」—— 看着像守卫坏了，其实只是抄漏了）
+            int maxSeconds = Integer.parseInt(extract(statusBody, "maxSeconds"));
+            check("★ data.maxSeconds 是个正经的正数（前端录音上限就用这个值）",
+                    maxSeconds > 0, String.valueOf(maxSeconds));
 
             // ── 真音频转写 ──
             byte[] wholeFileBytes = Files.readAllBytes(Path.of(wav));
@@ -111,17 +115,19 @@ public class AsrApiCheck {
                     wrongRate.contains("只支持 16000"), wrongRate);
 
             // ── 长度守卫 ──
-            // 3,840,000 字节 = 120 秒 @16k 单声道。发得出去本身就说明 Tomcat 没在
-            // 这一层挡下来（max-http-form-post-size 只管表单，application/octet-stream 不受它管）
-            byte[] atLimit = new byte[120 * 16000 * 2];
+            // 长度按上面读到的 maxSeconds 算，正好卡在边界上。这一段发得出去本身就说明
+            // Tomcat 没在这一层挡下来（max-http-form-post-size 只管表单，
+            // application/octet-stream 不受它管），所以字节数越大越能说明问题
+            byte[] atLimit = new byte[maxSeconds * 16000 * 2];
             String atLimitBody = postRaw(http, "/api/asr/transcribe?sampleRate=16000", token, atLimit);
-            check("★ 3.8 MB 的 body 没被 Tomcat 挡掉（不是 413）",
+            check("★ " + (atLimit.length / 1024 / 1024) + " MB 的 body（正好 " + maxSeconds
+                            + " 秒）没被 Tomcat 挡掉（不是 413）",
                     "0".equals(extract(atLimitBody, "code")),
                     atLimitBody.length() > 120 ? atLimitBody.substring(0, 120) : atLimitBody);
 
-            byte[] overLimit = new byte[121 * 16000 * 2];
+            byte[] overLimit = new byte[(maxSeconds + 1) * 16000 * 2];
             String overBody = postRaw(http, "/api/asr/transcribe?sampleRate=16000", token, overLimit);
-            check("★ 超上限（121 秒）被自己那句守卫拒掉（证明它确实经过了 controller）",
+            check("★ 超上限（" + (maxSeconds + 1) + " 秒）被自己那句守卫拒掉（证明它确实经过了 controller）",
                     overBody.contains("音频太长"), overBody);
 
             // ── 空 body ──
