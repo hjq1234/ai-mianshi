@@ -57,10 +57,17 @@ export DEEPSEEK_API_KEY=sk-你的key
 ### 2. 启动
 
 ```bash
-./mvnw spring-boot:run
+./mvnw -Dmaven.repo.local=D:/repository spring-boot:run
 ```
 
-> 如果你的 Maven 用了公司私服，加上 `-s 你的settings.xml`。
+> **本地仓库要显式指到 `D:/repository`。** 这台机器上 IDEA 的 Maven 配置
+> （`.idea/workspace.xml` 里的 `localRepository`）用的是它，而命令行不指的话默认落在
+> `C:\Users\<你>\.m2\repository`——两个**不是同一个仓库**（`~/.m2/settings.xml` 不存在，
+> `-s` 指的那个 `settings.xml` 也没写 `localRepository`）。
+> 不指就会出现「`mvnw compile` 明明过了，IDEA 报找不到包」这种两边不一致的怪事：
+> 手工 `install:install-file` 装进一个仓库，另一个自然看不见。
+>
+> 如果你的 Maven 用了公司私服，再加上 `-s 你的settings.xml`。
 
 ### 3. 打开
 
@@ -116,12 +123,19 @@ sherpa-onnx 没发 Maven 中央仓库，发在 JitPack；而本机 `settings.xml
 
 ./mvnw install:install-file -Dfile=<下载路径>/sherpa-onnx-jvm-1.13.8.jar \
   -DgroupId=com.github.k2-fsa.sherpa.onnx -DartifactId=sherpa-onnx-jvm \
-  -Dversion=v1.13.8 -Dpackaging=jar
+  -Dversion=v1.13.8 -Dpackaging=jar \
+  -DlocalRepositoryPath=D:/repository
 
 ./mvnw install:install-file -Dfile=<下载路径>/sherpa-onnx-native-lib-win-x64-1.13.8.jar \
   -DgroupId=com.github.k2-fsa.sherpa.onnx -DartifactId=sherpa-onnx-native-lib-win-x64 \
-  -Dversion=v1.13.8 -Dpackaging=jar
+  -Dversion=v1.13.8 -Dpackaging=jar \
+  -DlocalRepositoryPath=D:/repository
 ```
+
+`-DlocalRepositoryPath` 这一条**不能省**：`install:install-file` 默认装进
+`C:\Users\<你>\.m2\repository`，而 IDEA 读的是 `D:/repository`（见上面「启动」那段的说明）。
+装错了地方的表现是「命令行 build 过、IDEA 里 `程序包com.k2fsa.sherpa.onnx不存在`」，
+换个仓库再装一次才对得上。
 
 换台机器、或清了本地仓库，这两条要重做一次。
 

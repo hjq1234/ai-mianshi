@@ -27,6 +27,11 @@ export JAVA_HOME="/c/Program Files/Java/jdk-21"
 
 `~/.m2/settings.xml` 不存在，`-s /d/apache-jmeter-5.4.3/settings.xml` 是唯一的配置来源。
 
+本地仓库也要显式指：`-Dmaven.repo.local=D:/repository`。不指的话命令行落在
+`C:\Users\<你>\.m2\repository`，而 IDEA 读 `D:\repository` —— 两个不是同一个仓库，
+手工 `install:install-file` 装进一个、另一个就看不见（语音那两个 sherpa jar 就是这么踩的）。
+本节所有 `mvnw` 命令都该带上这个参数。
+
 ---
 
 ## Java 验证程序
@@ -34,7 +39,7 @@ export JAVA_HOME="/c/Program Files/Java/jdk-21"
 先编译测试代码：
 
 ```bash
-./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -o -q test-compile
+./mvnw -s /d/apache-jmeter-5.4.3/settings.xml -Dmaven.repo.local=D:/repository -o -q test-compile
 ```
 
 `checks/` 下的程序分两类，跑法不同。
