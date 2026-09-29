@@ -94,7 +94,57 @@ HTTP POST /api/interview/1/answer → 200 | 8421 ms | user=1
 
 请求日志走 `RequestLogFilter`（挂在 `/api/*` 上），只记方法和耗时这类元数据，
 不记请求体——回答和简历是候选人的隐私内容。出题日志打题目全文但不打 prompt，
-因为简历摘要就拼在 prompt 里。
+因为简历摘要就拼在 prompt 里。语音转写同样只记耗时和字数，不记转出来的文本。
+
+### 语音答题（可选，本地模型）
+
+答题可以用语音说，识别在本机跑，不联网、音频不上传。
+
+**这一步是可选的**：没配模型的话应用照常启动，只是答题区不显示麦克风按钮，打字照旧。
+
+**1. 装两个 jar（约 8 MB）**
+
+sherpa-onnx 没发 Maven 中央仓库，发在 JitPack；而本机 `settings.xml` 的
+`<mirrorOf>*,!lianjia-*</mirrorOf>` 会把 jitpack.io 的请求改写到阿里云（阿里云没这个包），
+所以改成手工下载 + 装进本地仓库：
+
+```bash
+# 从 GitHub release 下这两个（版本字面量里的 v 是必须的）
+#   sherpa-onnx-jvm-1.13.8.jar
+#   sherpa-onnx-native-lib-win-x64-1.13.8.jar
+# https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/<文件名>
+
+./mvnw install:install-file -Dfile=<下载路径>/sherpa-onnx-jvm-1.13.8.jar \
+  -DgroupId=com.github.k2-fsa.sherpa.onnx -DartifactId=sherpa-onnx-jvm \
+  -Dversion=v1.13.8 -Dpackaging=jar
+
+./mvnw install:install-file -Dfile=<下载路径>/sherpa-onnx-native-lib-win-x64-1.13.8.jar \
+  -DgroupId=com.github.k2-fsa.sherpa.onnx -DartifactId=sherpa-onnx-native-lib-win-x64 \
+  -Dversion=v1.13.8 -Dpackaging=jar
+```
+
+换台机器、或清了本地仓库，这两条要重做一次。
+
+**2. 下模型（约 228 MB）**
+
+从 `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` 下两个文件到**仓库外**的目录：
+
+```
+model.int8.onnx    228.2 MB   ← 别下 model.onnx，那是 fp32 版，894 MB，没必要
+tokens.txt           0.3 MB
+```
+
+**3. 指过去**
+
+```bash
+export APP_ASR_MODEL_DIR=D:/models/sense-voice
+```
+
+没设这个变量时 `/api/asr/status` 返 `available:false`，页面不显示麦克风按钮。
+
+**它是怎么工作的**：浏览器录音 → 页内用 `OfflineAudioContext` 重采样成 16k 单声道 PCM16
+→ `POST /api/asr/transcribe` → 只读的转写块 → 你确认后走**原来那个** `/answer` 接口。
+服务端不碰音频格式（不引 FFmpeg），`graph/` 包和评分链路一行没动。
 
 ## 技术栈
 
@@ -109,13 +159,14 @@ HTTP POST /api/interview/1/answer → 200 | 8421 ms | user=1
 | 密码 | `spring-security-crypto` | 只要 BCrypt 一个类，不引 Spring Security 全家桶 |
 | 前端 | Vue 3 CDN 版 | 无 node/npm 构建链，一个 `mvn package` 出一个 jar |
 | 图表 | ECharts 5.6.0（CDN） | 复盘页三张坐标图。锁 5.6.0 而不是 6.x：只用 radar/line/bar，要的是 API 稳定 |
+| 语音识别 | sherpa-onnx + SenseVoiceSmall int8 | 本地跑，不联网、音频不出机器；单 jar + 单文件模型，不需要 Python 进程 |
 
 ## 目录结构
 
 ```
 src/main/java/com/ke/nhservice/aimianshi/
 ├── graph/          图引擎（纯通用，不 import biz/controller/wrapper）
-├── wrapper/        第三方封装（llm / pdf）
+├── wrapper/        第三方封装（llm / pdf / asr）
 ├── biz/            业务（interview / resume / user / knowledge）
 ├── controller/     REST 接口
 └── common/         工具、异常、常量、配置、DTO
@@ -178,6 +229,9 @@ GET    /api/interview/list
 GET    /api/interview/{id}/detail   复盘详情（含 dimensionAverages 本场五维均分）
 GET    /api/interview/{id}/trace    节点轨迹
 GET    /api/interview/stats         历史五维均分，给雷达图做对比
+
+GET    /api/asr/status              语音是否可用（前端据此决定显不显示麦克风）
+POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {text}
 ```
 
 除 `/api/auth/login` 外全部要 `Authorization: Bearer <token>`。
@@ -230,6 +284,11 @@ GET    /api/interview/stats         历史五维均分，给雷达图做对比
 | 图表依赖 CDN | ECharts 从 jsdelivr 引，离线环境下三张图会显示「图表库没加载出来」，页面其余部分照常 |
 | 泳道图在 40 题以上会变长 | 每轮一行、不做虚拟滚动。10 题的设计上限下没问题 |
 | 无流式输出 | 事件驱动架构的必然结果。要加就让 `/answer` 单独返回 SSE |
+| 语音依赖两个不在中央仓库的 jar | 换机器 / 清了本地仓库要重跑两次 `install:install-file`，仓库里没有东西记录这一步 |
+| 228 MB 模型不进仓库 | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
+| 只支持 Windows x64 | `pom.xml` 里写死了 `native-lib-win-x64`。换平台改那一行 artifactId 即可 |
+| 转写结果不可编辑 | 故意的：能改就会边想边改稿，练的就不是口语表达了。要改就重录 |
+| 语音上限 2 分钟 | `app.asr.max-seconds`。到点自动停并转写（等用户自己发现「已经说了两分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
 | token 无法主动失效 | 登出只是前端删 token。单用户自用够用 |
 | 知识库只留接口不实现 | 一期 YAGNI，见文末「还没做的」 |
 | 无注册流程 | 账号直接建库 |
@@ -248,3 +307,4 @@ GET    /api/interview/stats         历史五维均分，给雷达图做对比
 
 - 嵌入知识库检索（`biz/knowledge` 只留了接口）
 - 流式输出（出题要等 5-15 秒，期间前端只能转圈）
+- 流式语音识别（SenseVoiceSmall 本身非流式；而且实时出字会让人盯着屏幕改稿，和练口语的目的相反）
