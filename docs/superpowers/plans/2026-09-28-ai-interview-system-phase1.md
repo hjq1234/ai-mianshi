@@ -12,6 +12,55 @@
 
 ---
 
+## 执行结果（2026-09-29 收尾时补记）
+
+**30 个 Task 全部实现并提交**，计划里声明要创建的 **90 个文件全部存在**
+（唯一一条「缺失」是 `prompts/*.md` 这个通配写法，8 个提示词文件都在）。
+产物：`target/ai-mianshi-0.0.1-SNAPSHOT.jar`，`mvn clean package` BUILD SUCCESS。
+
+**但是：本文件 Task 0–26 的复选框是「未勾」状态，别被它误导。**
+原因不在于活没干，而在于计划是按 TDD 写的（「写失败测试 → 跑它看它红 → 实现 → 跑绿 → 提交」），
+而用户明确要求 **「写代码不用写测试用例之类的」**——仓库里一个测试类都没有。
+那些「写测试 / 跑测试」的步骤是被**豁免**的，不是被跳过的，所以不勾。
+
+替代方案是**在仓库之外**做验证（临时程序放在 `%TEMP%`，不进仓库），
+分五层，每层都是可重复运行的：
+
+| 程序 | 验什么 | 结果 |
+|---|---|---|
+| `AppJsCheck.js` | `app.js` 在 node 沙箱里跑：api 封装、token、markdown 渲染、常量与后端一致 | 51/51 |
+| `PageCheck.js` | 六个页面的内联脚本在沙箱里跑：`mounted` / 各方法 / computed，路由用桩替换 | 115/115 |
+| `StaticWebCheck.java` | 真 HTTP 取静态资源、404 处理、无 token 时页面仍可打开（不能死锁） | 34/34 |
+| `ResumeApiCheck.java` | 简历上传/列表/设默认/删除 + 三条错误分支的中文文案 | 25/25 |
+| `ApiCheck.java` | 面试全链路 HTTP（假 LLM 覆盖）：start/answer/finish/resume/state/list/detail/trace | 43/43 |
+| `JarCheck.java` | 打出来的 jar 独立启动：静态页、提示词、建表、登录、写库 | — |
+
+上表 268 条断言里，**抓到过 4 个真 bug**（都不是「测试写错了」，是产品缺陷）：
+
+1. `renderMarkdown` 的列表正则写成非贪婪，两个并列的 `<li>` 会各自被包一层 `<ul>`，渲染成两个断开的列表
+2. 静态文件 404 走的是兜底分支，按 ERROR 打整条堆栈并回 500；而浏览器每次开页面都请求 `/favicon.ico`，等于每次刷新都灌一条 ERROR
+3. 上传超 10MB 返回英文的 `Maximum upload size exceeded` + 500，而页面上写着「不超过 10MB」
+4. `record` 的布尔分量 `isDefault` 究竟序列化成 `isDefault` 还是 `default` 没人知道——两个页面都读它，键名一变「默认」标签和默认简历预选会静静地全废。断言钉死为 `isDefault`
+
+还有一类不是 bug 但同样致命的问题：`.progress-bar > i` 选不中页面实际写的 `<div :style>`、
+`.small` 这个类**根本没定义**（只在 `button.small` 里有）、导航写成 `records.html` 而文件叫 `history.html`。
+这三条都只在「类名/文件名两边对不上」时才会暴露，看代码和看浏览器都很难发现，是脚本比对出来的。
+
+**仍未做的一件事：真实 LLM 那一遍（Task 23 Step 6）。**
+需要一个可用的 `DEEPSEEK_API_KEY`。设置后跑：
+
+```bash
+export DEEPSEEK_API_KEY=sk-你的key
+./mvnw -s /d/apache-jmeter-5.4.3/settings.xml spring-boot:run
+# 然后浏览器走完一场 10 题面试
+```
+
+上面所有接口层的验证都用 `@Primary` 的假 LLM 覆盖了真客户端，
+验的是路由、鉴权、JSON 形状、VO 转换、图的路由决策，**与真实模型无关**；
+真实模型的质量（出题是否合理、评分是否靠谱、报告是否能读）只能人看。
+
+---
+
 ## 环境与命令速查
 
 | 项 | 值 |
