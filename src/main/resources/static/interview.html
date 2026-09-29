@@ -86,6 +86,11 @@
                       placeholder="写下你的回答…　也可以点右下角麦克风说（Ctrl+Enter 提交）"
                       @keydown.ctrl.enter="submit"></textarea>
 
+            <!-- 流式正在说的那半句。**不放 textarea 里** —— 它一直在被改写
+                 （「我要用 redis」→「我要用 Redis 做缓存」），写进框里会把用户打的草稿
+                 反复搅乱、光标也没了。只有说到停顿定稿了才追加进框（见 asr-stream.js） -->
+            <p class="asr-partial" v-if="asrState === 'recording' && asrPartial">{{ asrPartial }}</p>
+
             <div class="answer-bar">
               <!-- 左边这半是录音状态的提示。说话时不看着点什么，就不知道麦克风有没有在收 -->
               <span class="asr-slot">
@@ -99,13 +104,23 @@
                 <span class="asr-hint" v-else-if="asrState === 'done'">已转写，可以直接改</span>
               </span>
 
+              <!-- 模式选择。放麦克风左边是因为它管的是「这个麦克风怎么工作」。
+                   两个都不可用时不显示这个下拉（没得选），那时麦克风按钮也不显示 -->
+              <select class="asr-mode" v-if="asrAvailable || asrStreamAvailable"
+                      :value="asrMode" @change="asrModeSet($event.target.value)">
+                <option value="stream" :disabled="!asrStreamAvailable"
+                        :title="asrStreamReason">⚡ 流式</option>
+                <option value="offline" :disabled="!asrAvailable">🎙 离线</option>
+              </select>
+
+              <!-- 按钮只认 micStart / micStop，走哪条路由 this.asrMode 决定 -->
               <button type="button" class="icon-btn recording"
-                      v-if="asrAvailable && asrState === 'recording'"
-                      title="停止并转写" @click="asrStop">⏹</button>
-              <button type="button" class="icon-btn" v-else-if="asrAvailable"
+                      v-if="micAvailable && asrState === 'recording'"
+                      title="停止并转写" @click="micStop">⏹</button>
+              <button type="button" class="icon-btn" v-else-if="micAvailable"
                       :disabled="submitting || asrState === 'transcribing'"
                       :title="asrState === 'transcribing' ? '转写中…' : '录音回答'"
-                      @click="asrStart">🎤</button>
+                      @click="micStart">🎤</button>
 
               <button :disabled="!canSubmit" @click="submit">
                 <span v-if="submitting" class="spinner"></span>
@@ -135,6 +150,7 @@
 <script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
 <script src="js/app.js"></script>
 <script src="js/asr.js"></script>
+<script src="js/asr-stream.js"></script>
 <script>
   const { createApp } = Vue;
 
@@ -148,7 +164,8 @@
         booting: true,
         DIMENSION_LABELS,
         NEXT_ACTION_LABELS,
-        ...asrData()
+        ...asrData(),
+        ...asrStreamData()
       };
     },
     computed: {
@@ -194,11 +211,29 @@
         this.booting = false;
       }
 
+      // 先定模式，再拉 /status：顺序反了的话「存着流式但流式没配」那回落判断
+      // 就没机会执行，页面进来是「按钮不见了」而离线其实能用
+      this.asrModeInit();
       // 拉一次 /status 决定要不要显示麦克风。拿不到就当没有语音，不影响打字
       this.asrInit();
     },
     methods: {
       ...ASR_METHODS,
+      ...ASR_STREAM_METHODS,
+
+      /**
+       * 麦克风按钮的分发点。模板只认 micStart / micStop，不关心有几个模式。
+       *
+       * 放页面里而不是 asr.js 里：让 asr.js 反过来引用 asr-stream.js 的方法名，
+       * 两个文件就绑死了，少加载一个就是运行时 undefined；放这里一眼能看出有两条路。
+       */
+      micStart() {
+        return this.asrMode === 'stream' ? this.asrStreamStart() : this.asrStart();
+      },
+      micStop() {
+        return this.asrMode === 'stream' ? this.asrStreamStop() : this.asrStop();
+      },
+
       fmtScore,
       scoreClass,
       apply(turn) {
@@ -218,8 +253,14 @@
             body: { answer: submitted }
           });
           this.answer = '';
-          // 语音状态也要清，否则下一题还挂着上一题的转写
-          this.asrReset();
+          // 语音状态也要清，否则下一题还挂着上一题的转写。
+          // 流式那条得**把服务端会话也收掉**：会话在服务端手里，不发 stop 就得等它
+          // 2 分钟过期回收，而 maxSessions 只有 4 个，试几次就满了
+          if (this.asrMode === 'stream') {
+            await this.asrStreamStop(true);
+          } else {
+            this.asrReset();
+          }
           this.apply(turn);
         } catch (e) {
           toast(e.message, true);

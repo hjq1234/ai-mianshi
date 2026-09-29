@@ -386,6 +386,32 @@ details.qa .qa-body .dim-grid { margin-top: 8px; }
 /* 录音中悬停不要变回去 —— 它这会儿是个「停止」按钮，不是可以点第二遍的东西 */
 .icon-btn.recording:hover:not(:disabled) { background: var(--danger); }
 
+/* 模式选择（⚡流式 / 🎙离线）。窄，别抢麦克风和提交的视觉位置 */
+select.asr-mode {
+  flex: none;
+  /* ★ 必须显式写：上面那条全局的 input, select, textarea { width: 100% } 会把这个
+     select 撑满整条 .answer-bar，麦克风和提交被挤到下一行去 */
+  width: auto;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 正在说的那半句。斜体 + 更淡，一眼看出它「还不是框里的内容」——
+   和 textarea 里那些字长得一样的话，用户会以为已经进去了、跑去改它，
+   然后下一片一到就被改掉 */
+.asr-partial {
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+  /* 半句长了要能换行，不能撑破外框 */
+  word-break: break-word;
+}
+
 .asr-error {
   margin: 0;
   padding: 10px 12px;

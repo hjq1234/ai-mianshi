@@ -12,12 +12,17 @@
  *   2. ★ 转写结果**追加**进答题框，不覆盖 —— 覆盖会把已经打的字悄悄吃掉
  *   3. ★ asrReset / 重录 走的是 asrCancel 而不是 asrStop ——
  *      走错的话用户放弃了录音，却还会白发一次 /api/asr/transcribe 请求
- *   4. interview.html 模板：一个答题框 + 常显麦克风、没有「模式」这个概念、
+ *   4. interview.html 模板：**还是一个答题框**、按 micAvailable 显示麦克风、
  *      提交时挡住录音/转写中
  *
+ * 这份只管**离线**那条（asr.js）。流式那条在 AsrStreamPageCheck.js，两份分开是因为
+ * 两条路的替身环境完全不搭（这边装 MediaRecorder，那边装 AudioWorklet）。
+ *
  * 第一版是「语音/打字两个模式」+ 只读转写块，那一版的断言（asrSubmitText 四种组合、
- * 语音模式下不给 textarea）已随设计一起删掉。这里留了几条**反证式**的断言
- * （不许再出现 asrMode / 改用打字），免得那套东西哪天又长回来。
+ * 语音模式下不给 textarea）已随设计一起删掉。后来加了流式，「模式」这个词回来了，
+ * 但含义不一样：现在是**采集方式**（离线 / 流式），答题框仍然只有一个。
+ * 所以反证式的断言从「不许出现 asrMode」改成「模式取值只能是 offline/stream、
+ * 且不许再出现『改用打字』那种切换」—— 前者已经过时了，留着会把自己判红。
  */
 
 const fs = require('fs');
@@ -81,6 +86,12 @@ function makeVm(overrides = {}) {
   for (const [k, fn] of Object.entries(ASR_METHODS)) {
     vm[k] = typeof fn === 'function' ? fn.bind(vm) : fn;
   }
+  // 页面里 micStart / micStop 是按 asrMode 分发的（interview.html）。这份检查只测离线那条，
+  // 所以直接指向 asrStart / asrStop。**必须补**：抽了 ticker 之后「到上限自动停」调的是
+  // this.micStop()，不补的话那条会因为 `this.micStop is not a function` 假红 ——
+  // 而且报出来的是「没自动停」，看着像计时器坏了
+  vm.micStart = () => vm.asrStart();
+  vm.micStop = () => vm.asrStop();
   return vm;
 }
 
@@ -366,14 +377,23 @@ function installRecorderEnv(supportGetUserMedia = true) {
   check('★ 就一个答题框（textarea 只有 1 个），不是「两种模式各一套」',
     textareas === 1, 'textarea 出现 ' + textareas + ' 次');
 
+  // 那个「中间不超过 N 个字符」只是「它们在同一个 answer-bar 里」的近似写法。
+// 加了模式下拉之后这段长到 1300 多字符，从 900 放宽到 2000 —— 真正的断言是前面那三组
+  // indexOf 的顺序，窗口只是别让它匹配到页面别处的 icon-btn
   check('★ 麦克风在那个框里面（answer-box → textarea → answer-bar → icon-btn 的顺序）',
     html.indexOf('class="answer-box"') < html.indexOf('<textarea')
     && html.indexOf('<textarea') < html.indexOf('class="answer-bar"')
     && html.indexOf('class="answer-bar"') < html.indexOf('icon-btn')
-    && /class="answer-bar"[\s\S]{0,900}icon-btn/.test(html), '');
+    && /class="answer-bar"[\s\S]{0,2000}icon-btn/.test(html), '');
 
-  check('★ 麦克风的显示条件只有 asrAvailable（不可用时静默隐藏）',
-    /v-else-if="asrAvailable"/.test(html), '');
+  // 加了流式之后显示条件从 asrAvailable 变成 micAvailable()（按当前模式挑对应的那个
+  // available）。断的仍然是「不可用时静默隐藏」这件事，只是换了个名字
+  check('★ 麦克风的显示条件走 micAvailable()（不可用时静默隐藏）',
+    /v-else-if="micAvailable"/.test(html), '');
+  check('★ 点了麦克风走 micStart / micStop，不直接调 asrStart / asrStop '
+    + '（直连的话流式模式下会去停一个没在跑的 MediaRecorder）',
+    /@click="micStart"/.test(html) && /@click="micStop"/.test(html)
+    && !/@click="asrStart"/.test(html) && !/@click="asrStop"/.test(html), '');
 
   // 先剥掉 HTML 注释再查：模板里的注释**故意**提到了那个被砍掉的按钮
 // （「这里不再需要『改用打字』那个逃生按钮」），那是解释不是代码。
@@ -385,11 +405,21 @@ function installRecorderEnv(supportGetUserMedia = true) {
   check('★ 没有只读转写块了（.asr-text / .asr-result 都不该再有）',
     !html.includes('class="asr-text"') && !html.includes('class="asr-result"'), '');
 
-  // 断言的是「没有对 asrMode 的读写」，不是「不许出现 asrMode 这四个字」——
-  // 两边的注释里都提到了这个被砍掉的设计，那是故意的
-  check('★ asr.js / interview.html 里都没有对 asrMode 的读写（模式这个概念真的没了）',
-    !/\.asrMode/.test(asrSrc) && !/\.asrMode/.test(html)
-    && !/asrMode\s*:/.test(asrSrc) && !/asrMode\s*:/.test(html), '');
+  // 「模式」这个词回来了，但含义变了：现在是**采集方式**（离线 / 流式），
+  // 不是「语音还是打字」—— 答题框始终只有一个（上面那条 textarea 计数盯着的就是这件事）。
+  // 所以这里断的是「取值只能是这两个」，而不是「不许出现 asrMode」
+  const streamSrc = read('js/asr-stream.js');
+  check('★ 模式取值只有 offline / stream —— 是「怎么采集」，不是「语音还是打字」',
+    /ASR_STREAM_MODES = \{ offline: '离线', stream: '流式' \}/.test(streamSrc), '');
+  check('★ 模式下拉就两个选项，且没有 typing 之类的第三种',
+    /<option value="stream"/.test(html) && /<option value="offline"/.test(html)
+    && !/value="typing"/.test(html), '');
+  // 分发（micStart / micStop）在页面里，asr.js 只在 asrInit 里碰 asrMode：
+  // 读一次判断要不要回落 + 赋值一次。第二处分支就说明「怎么走」被写进了 asr.js，
+  // 那就该搬回页面去 —— 那条路少加载 asr-stream.js 就是运行时 undefined
+  check('★ 离线那条不按模式分发，只在 asrInit 里读一次 asrMode 做回落',
+    /asrInit\(\)[\s\S]*?this\.asrMode === 'stream'[\s\S]*?this\.asrMode = 'offline'/.test(asrSrc)
+    && (asrSrc.match(/\.asrMode/g) || []).length === 2, '');
 
   check('★ 提交按钮的禁用条件用 canSubmit',
     html.includes(':disabled="!canSubmit"'), '');

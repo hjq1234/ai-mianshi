@@ -10,6 +10,10 @@
  * 第一版是模式切换（语音模式下把 textarea 藏起来、转写结果只读），砍掉了：
  * 说错一个字就得整段重录，用起来像在跟 UI 较劲。
  *
+ * ★ 这个文件是**离线**那条：录完整段、一次转写。另有一条流式的在 asr-stream.js
+ *   （边说边出字），两条平级、互不引用。asrMode 和模式分发在 interview.html 里，
+ *   因为那层才知道「现在该走哪条」。共用的只有 ticker 和 rms，见下。
+ *
  * 状态机：idle → recording → transcribing → done →（再录一次回 recording）
  *                                     ↘（出错回 idle + asrError）
  */
@@ -30,14 +34,30 @@ function asrData() {
 
 const ASR_METHODS = {
 
-  /** 页面加载时调一次。拿不到就当没有语音 —— 打字的路径必须不受影响 */
+  /**
+   * 页面加载时调一次。拿不到就当没有语音 —— 打字的路径必须不受影响。
+   *
+   * 两条路的可用性一次性都读回来（/status 里是平铺的 streamAvailable/streamReason，
+   * 不嵌套的原因见 AsrStatusVO 的注释）。
+   */
   async asrInit() {
     try {
       const s = await api('/api/asr/status');
       this.asrAvailable = !!s.available;
+      this.asrStreamAvailable = !!s.streamAvailable;
+      this.asrStreamReason = s.streamReason || '';
       if (s.maxSeconds) this.asrMaxSeconds = s.maxSeconds;
     } catch (e) {
+      // 网络挂了 / 401：两条都当不可用，页面只剩打字。打字那条路必须不受影响
       this.asrAvailable = false;
+      this.asrStreamAvailable = false;
+    }
+    // 存着「流式」但流式没配（换机器了、模型删了）→ 落回离线。
+    // 不落的话页面进来就是「录音按钮不见了」，而离线明明是能用的。
+    // 两个都没有就留着 'stream' 不动：反正 micAvailable() 是 false，按钮本来就不显示，
+    // 而这里改成 'offline' 反而会把用户的选择悄悄改掉
+    if (this.asrMode === 'stream' && !this.asrStreamAvailable && this.asrAvailable) {
+      this.asrMode = 'offline';
     }
   },
 
@@ -97,21 +117,40 @@ const ASR_METHODS = {
     this.asrSeconds = 0;
     this.asrState = 'recording';
     rec.start();
+    this.asrStartTicker();
+  },
 
+  /**
+   * 秒数 + 电平 + 到上限自动停。**两条路（离线 / 流式）共用这一份**。
+   *
+   * 抽出来的理由很实际：流式那条需要一模一样的行为，复制一份的话
+   * 「到上限自动停」这条规则就有两处实现，改一处忘一处 —— 而忘了的那次
+   * 表现是「超时之后服务端直接拒掉，用户刚说的那段白说了」，很难往计时器上想。
+   */
+  asrStartTicker() {
+    clearInterval(this._asrTimer);
     // 100ms 一跳：电平条要顺，秒数要准（按 Date.now 算，不靠累加，累加会被 setInterval 的漂移带偏）
     this._asrTimer = setInterval(() => {
       this.asrSeconds = Math.floor((Date.now() - this._asrStartedAt) / 1000);
       this.asrLevel = asrRms(this._asrAudio.analyser, this._asrAudio.buf);
-      // 到上限自动停。等用户自己发现「已经说了两分钟」不如替她停掉 ——
+      // 到上限自动停。等用户自己发现「已经说了几分钟」不如替她停掉 ——
       // 停了还能转写；超了服务端会直接拒掉，那段话就白说了
-      if (this.asrSeconds >= this.asrMaxSeconds) this.asrStop();
+      //
+      // 调 micStop() 而不是 asrStop()：计时器不该知道「现在是哪个模式」，
+      // 分发是页面（interview.html）的活。写死成 asrStop 的话，流式模式下到点会去
+      // 停一个根本没在跑的 MediaRecorder，麦克风一直亮着
+      if (this.asrSeconds >= this.asrMaxSeconds) this.micStop();
     }, 100);
+  },
+
+  asrStopTicker() {
+    clearInterval(this._asrTimer);
+    this._asrTimer = null;
   },
 
   asrStop() {
     if (this.asrState !== 'recording') return;
-    clearInterval(this._asrTimer);
-    this._asrTimer = null;
+    this.asrStopTicker();
     this.asrLevel = 0;
     this.asrState = 'transcribing';
     // 后面交给 onstop（放麦克风 → 转写）
@@ -141,10 +180,7 @@ const ASR_METHODS = {
    * 关键动作是先把 onstop 摘掉再 stop()——摘了就没人接这个事件了。
    */
   asrCancel() {
-    if (this._asrTimer) {
-      clearInterval(this._asrTimer);
-      this._asrTimer = null;
-    }
+    this.asrStopTicker();
     if (this._asrRecorder && this._asrRecorder.state !== 'inactive') {
       this._asrRecorder.onstop = null;
       this._asrRecorder.stop();
