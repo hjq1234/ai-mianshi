@@ -56,6 +56,28 @@
       <artifactId>pdfbox</artifactId>
       <version>3.0.4</version>
     </dependency>
+
+    <!-- sherpa-onnx：本地语音识别（答题区录音转文字）。
+         这两个 jar 不在 Maven 中央仓库，得先下载再 mvn install:install-file 装进本地仓库
+         （命令见 README 的「语音答题」一节）。换台机器 / 清了本地仓库就要重做一次。
+         groupId 刻意用 JitPack 那套 com.github.k2-fsa.sherpa.onnx，不是项目自己的
+         com.k2fsa.sherpa.onnx —— 将来若改成 pom 里加 repository 直拉，这里一个字不用动。
+         注意版本字面量里的 v 是必须的（v1.13.8），和 install-file 的 -Dversion 必须一模一样 -->
+    <dependency>
+      <groupId>com.github.k2-fsa.sherpa.onnx</groupId>
+      <artifactId>sherpa-onnx-jvm</artifactId>
+      <version>v1.13.8</version>
+    </dependency>
+    <!-- 这个 jar 里内嵌着 sherpa-onnx/native/win-x64/ 下的 onnxruntime.dll 和
+         sherpa-onnx-jni.dll，运行时 LibraryLoader 自己解压加载，
+         所以**不需要**配 java.library.path。
+         换平台就换这一条的 artifactId（linux-x64 / osx-aarch64 / win-arm64 都有） -->
+    <dependency>
+      <groupId>com.github.k2-fsa.sherpa.onnx</groupId>
+      <artifactId>sherpa-onnx-native-lib-win-x64</artifactId>
+      <version>v1.13.8</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-webmvc-test</artifactId>
