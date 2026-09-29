@@ -6,6 +6,7 @@ import com.ke.nhservice.aimianshi.biz.interview.trace.TraceRecorder;
 import com.ke.nhservice.aimianshi.common.config.InterviewProperties;
 import com.ke.nhservice.aimianshi.common.constant.Difficulty;
 import com.ke.nhservice.aimianshi.common.constant.RecordStatus;
+import com.ke.nhservice.aimianshi.common.dto.InterviewStatsVO;
 import com.ke.nhservice.aimianshi.common.exception.BizException;
 import com.ke.nhservice.aimianshi.common.util.JsonUtil;
 import com.ke.nhservice.aimianshi.graph.CompiledGraph;
@@ -170,6 +171,15 @@ public class InterviewEngine {
 
     public List<TraceRow> traces(Long recordId) {
         return dao.listTraces(recordId);
+    }
+
+    /** 历史均分，给复盘页雷达图做对比。一场都没答过题时返回 finishedCount=0 */
+    public InterviewStatsVO stats(Long userId) {
+        List<Long> finishedIds = dao.listFinishedIdsWithAnswers(userId);
+        if (finishedIds.isEmpty()) {
+            return InterviewStats.of(0, List.of());
+        }
+        return InterviewStats.of(finishedIds.size(), dao.listDialoguesByRecords(finishedIds));
     }
 
     // ────────────────────────── 内部 ──────────────────────────

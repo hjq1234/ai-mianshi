@@ -9,6 +9,7 @@ import com.ke.nhservice.aimianshi.common.auth.UserContext;
 import com.ke.nhservice.aimianshi.common.dto.AnswerRequest;
 import com.ke.nhservice.aimianshi.common.dto.ApiResponse;
 import com.ke.nhservice.aimianshi.common.dto.InterviewDetailVO;
+import com.ke.nhservice.aimianshi.common.dto.InterviewStatsVO;
 import com.ke.nhservice.aimianshi.common.dto.InterviewTurnVO;
 import com.ke.nhservice.aimianshi.common.dto.RecordListItemVO;
 import com.ke.nhservice.aimianshi.common.dto.StartInterviewRequest;
@@ -124,6 +125,15 @@ public class InterviewController {
         return ApiResponse.ok(engine.traces(id).stream()
                 .map(InterviewController::toTraceVO)
                 .toList());
+    }
+
+    /**
+     * 历史均分，复盘页雷达图拿它做对比。
+     * ★ 没有 {id}：它是「所有已完成场次」的聚合，不属于任何一场。
+     */
+    @GetMapping("/stats")
+    public ApiResponse<InterviewStatsVO> stats() {
+        return ApiResponse.ok(engine.stats(UserContext.get()));
     }
 
     // ────────────────────────── 转换 ──────────────────────────

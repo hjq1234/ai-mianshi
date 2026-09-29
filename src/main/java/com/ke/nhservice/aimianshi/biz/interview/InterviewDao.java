@@ -39,6 +39,32 @@ public class InterviewDao {
             rs.getLong("updated_at"),
             rs.getString("resume_summary"));
 
+    /** 单场和批量两个查询共用，列顺序必须和下面的 mapper 对得上 */
+    private static final String SELECT_DIALOGUE = """
+            SELECT seq, topic, difficulty, question, answer, score, eval_json, next_action, next_topic
+            FROM t_interview_dialogue""";
+
+    private static final RowMapper<Dialogue> DIALOGUE_MAPPER = (rs, rowNum) -> {
+        Dialogue d = new Dialogue();
+        d.setSeq(rs.getInt("seq"));
+        d.setTopic(rs.getString("topic"));
+        d.setDifficulty(rs.getString("difficulty"));
+        d.setQuestion(rs.getString("question"));
+        d.setAnswer(rs.getString("answer"));
+        d.setScore(rs.getObject("score") == null ? null : rs.getDouble("score"));
+        d.setNextAction(rs.getString("next_action"));
+        d.setNextTopic(rs.getString("next_topic"));
+        String evalJson = rs.getString("eval_json");
+        if (evalJson != null && !evalJson.isBlank()) {
+            EvalJson ej = JsonUtil.fromJson(evalJson, EvalJson.class);
+            if (ej.dimensions() != null) {
+                d.setDimensions(ej.dimensions());
+            }
+            d.setComment(ej.comment());
+        }
+        return d;
+    };
+
     private final JdbcTemplate jdbc;
 
     public InterviewDao(JdbcTemplate jdbc) {
@@ -158,29 +184,40 @@ public class InterviewDao {
     }
 
     public List<Dialogue> listDialogues(Long recordId) {
-        return jdbc.query("""
-                SELECT seq, topic, difficulty, question, answer, score, eval_json, next_action, next_topic
-                FROM t_interview_dialogue WHERE record_id = ? ORDER BY seq
-                """, (rs, rowNum) -> {
-            Dialogue d = new Dialogue();
-            d.setSeq(rs.getInt("seq"));
-            d.setTopic(rs.getString("topic"));
-            d.setDifficulty(rs.getString("difficulty"));
-            d.setQuestion(rs.getString("question"));
-            d.setAnswer(rs.getString("answer"));
-            d.setScore(rs.getObject("score") == null ? null : rs.getDouble("score"));
-            d.setNextAction(rs.getString("next_action"));
-            d.setNextTopic(rs.getString("next_topic"));
-            String evalJson = rs.getString("eval_json");
-            if (evalJson != null && !evalJson.isBlank()) {
-                EvalJson ej = JsonUtil.fromJson(evalJson, EvalJson.class);
-                if (ej.dimensions() != null) {
-                    d.setDimensions(ej.dimensions());
-                }
-                d.setComment(ej.comment());
-            }
-            return d;
-        }, recordId);
+        return jdbc.query(SELECT_DIALOGUE + " WHERE record_id = ? ORDER BY seq",
+                DIALOGUE_MAPPER, recordId);
+    }
+
+    /**
+     * 批量取这些场次的全部逐题记录，给历史均分用。
+     * 照 {@link #countDialoguesByRecord} 的批量写法：拼进 SQL 的只有若干个 "?"，
+     * 参数仍走占位符绑定，没有注入面。
+     *
+     * eval_json 在这里就解析成五维了——均分要算的是维度，不是 JSON 字符串。
+     */
+    public List<Dialogue> listDialoguesByRecords(List<Long> recordIds) {
+        if (recordIds == null || recordIds.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = String.join(",", Collections.nCopies(recordIds.size(), "?"));
+        return jdbc.query(SELECT_DIALOGUE + " WHERE record_id IN (" + placeholders + ") ORDER BY record_id, seq",
+                DIALOGUE_MAPPER, recordIds.toArray());
+    }
+
+    /**
+     * 该用户「答过题的」已完成场次 id，新的在前。
+     *
+     * ★ EXISTS 那一条不是多余的：图跑挂过的场次也会被标成 finished 但一题没答
+     * （实测记录 2 就是这样），把它算进去，雷达图会显示「历史均分（3 场）」
+     * 而实际只有 2 场的数据——分母和说法对不上。
+     */
+    public List<Long> listFinishedIdsWithAnswers(Long userId) {
+        return jdbc.queryForList("""
+                SELECT r.id FROM t_interview_record r
+                WHERE r.user_id = ? AND r.status = 'finished'
+                  AND EXISTS (SELECT 1 FROM t_interview_dialogue d WHERE d.record_id = r.id)
+                ORDER BY r.created_at DESC
+                """, Long.class, userId);
     }
 
     /**
