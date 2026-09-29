@@ -28,16 +28,34 @@ app:
     ttl-hours: 72
   llm:
     # DeepSeek 的 OpenAI 兼容端点。换通义/豆包/Kimi 只改这三行
-    base-url: https://api.deepseek.com
+    base-url: ${DEEPSEEK_URL:}
     # 本地调试用环境变量：export DEEPSEEK_API_KEY=xxx。
     # ★ 不要把 key 写回这个文件——它会被提交进 git
     api-key: ${DEEPSEEK_API_KEY:}
-    model: deepseek-chat
+    model: deepseek-v4.1-flash
     temperature: 0.7
     connect-timeout-seconds: 10
     read-timeout-seconds: 120
+  asr:
+    # 语音识别用的本地模型目录。模型是 228 MB，放在仓库外，所以这里填的是绝对路径。
+    #
+    # 写成 ${环境变量:默认值} 的形式，两种做法都留着：
+    #   不设 APP_ASR_MODEL_DIR → 用冒号后面这个默认值（IDEA 直接 Run 就能跑，不用配环境变量）
+    #   设了                   → 环境变量赢，换机器/换模型目录时不用动这个文件
+    #
+    # 目录不存在或为空时应用照常启动，只是 /api/asr/status 返 available:false、
+    # 答题区不显示麦克风。启动日志会打一行说明是哪种情况（见 AsrConfig）
+    model-dir: ${APP_ASR_MODEL_DIR:D:/models/sense-voice}
+    # 流式那一套。和上面是两套模型、两条独立的代码路径，目录也各配各的：
+    # 离线那个 SenseVoice 228 MB（带标点和数字规整），流式这个 zipformer 161 MB（都没带）
+    stream:
+      # 目录跟机器绑，就写在这儿；里面那几个模型文件名跟模型绑、对所有人都一样，
+      # 所以放在 AsrProperties.Stream 的字段默认值里，不占 yml 的行
+      model-dir: ${APP_ASR_STREAM_MODEL_DIR:D:/models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30}
+    # 其余字段（modelFile / tokensFile / numThreads / maxSeconds / language /
+    # inverseTextNormalization / debug）都有能用的默认值，要改就在这里加同名 kebab-case 行
   interview:
-    max-questions: 10
+    max-questions: 15
     # 同一话题最多问几题，问满强制换话题（算的是本话题答过几轮，不只是 deepen）
     max-follow-up: 3
     max-steps: 200
