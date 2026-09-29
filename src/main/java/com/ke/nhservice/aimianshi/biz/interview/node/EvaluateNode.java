@@ -26,10 +26,10 @@ import java.util.Map;
  * 评分。这是整张图信息最密集的节点，做了四件事：
  *
  * 1. 调 LLM 评分（失败则降级为 CONTINUE，不中断面试）
- * 2. 话题追踪（覆盖度、连续追问计数、必要时强制换话题）
+ * 2. 话题追踪（覆盖度、本话题已答轮数、问满则强制换话题）
  * 3. 落库 t_interview_dialogue（含图的分支决策）
  * 4. 清掉已消费的 answer，把本题推入滑动窗口
- * 5. switch 路由下挑好下一个话题写进 state.nextTopic，交给 SwitchNode 执行
+ * 5. switch 路由下挑好下一个话题写进 state.nextTopic，交给 switch 分支节点执行
  *
  * 关于落库的 next_action：用的是 InterviewRouting.decide() —— 和紧接着执行的分支
  * 判断是同一个纯函数。此时 state 还没被分支节点改动，所以算出来的结果和分支
@@ -58,12 +58,21 @@ public class EvaluateNode implements Node<InterviewState> {
         String answer = state.getAnswer();
         TopicTracker tracker = state.getTopicTracker();
 
-        EvalResult result = evaluate(llm, prompts, state, question, answer);
+        long startedAt = System.currentTimeMillis();
+        EvalResult result = evaluate(llm, prompts, props, state, question, answer);
+        NextAction suggested = result.getNextAction();
 
-        // 同一个话题追问太多次就强制换话题，不完全交给 LLM 判断
+        // 同一个话题问满轮数就强制换话题，不完全交给 LLM 判断。
+        // ★ followUpCount 现在是「本话题已经答过几轮」，不是「连续 deepen 了几次」——
+        // 旧写法只在 DEEPEN 时 +1，而答得中规中矩时 LLM 给的是 CONTINUE，
+        // 计数器永远是 0，这个守卫一次都没触发过（实测 10 题全问在同一个话题上）。
+        boolean forced = false;
         if (tracker.getFollowUpCount() >= props.getMaxFollowUp()) {
-            log.debug("话题「{}」已连续追问 {} 次，强制换话题",
-                    tracker.getCurrentTopic(), tracker.getFollowUpCount());
+            forced = suggested != NextAction.SWITCH;
+            if (forced) {
+                log.info("话题「{}」已问满 {} 轮，把 LLM 给的 {} 改判为 SWITCH",
+                        tracker.getCurrentTopic(), props.getMaxFollowUp(), suggested);
+            }
             result.setNextAction(NextAction.SWITCH);
         }
         state.setEvalResult(result);
@@ -100,16 +109,27 @@ public class EvaluateNode implements Node<InterviewState> {
         state.getDialogues().add(dialogue);
         state.getScoreHistory().add(result.getOverall());
         state.pushHistory(new HistoryItem(question, answer, result.getOverall()), HISTORY_WINDOW);
-        tracker.setFollowUpCount(result.getNextAction() == NextAction.DEEPEN
-                ? tracker.getFollowUpCount() + 1 : 0);
+
+        // 换话题就重新数，不换就累加。DEEPEN 和 CONTINUE 都算「还在这个话题上」
+        tracker.setFollowUpCount(InterviewRouting.SWITCH.equals(routing)
+                ? 0 : tracker.getFollowUpCount() + 1);
+
+        // 一次评分打三行：分数和分支（含 LLM 建议 vs 实际走了哪条）、五维、评语。
+        // 「LLM 建议」和「实际分支」要分开打——两者不一致时正是最能说明问题的一行。
+        log.info("第 {} 题评分 | 话题={} 难度={} | {} ms | 总分={} | LLM 建议={} 实际分支={}{}",
+                state.getQuestionIndex(), dialogue.getTopic(), dialogue.getDifficulty(),
+                System.currentTimeMillis() - startedAt, result.getOverall(),
+                suggested, routing, forced ? "（话题问满，已改判）" : "");
+        log.info("第 {} 题五维 | {}", state.getQuestionIndex(), result.getDimensions());
+        log.info("第 {} 题评语 | {}", state.getQuestionIndex(), result.getComment());
 
         // 答案已消费，清掉。这样下一轮回到 wait_answer 才会正确挂起
         state.setAnswer(null);
         return NodeResult.NEXT;
     }
 
-    private EvalResult evaluate(LlmClient llm, PromptLoader prompts, InterviewState state,
-                                String question, String answer) {
+    private EvalResult evaluate(LlmClient llm, PromptLoader prompts, InterviewProperties props,
+                                InterviewState state, String question, String answer) {
         Map<String, String> vars = new HashMap<>();
         vars.put("position", orEmpty(state.getPosition()));
         vars.put("domain", orEmpty(state.getDomain()));
@@ -117,6 +137,10 @@ public class EvaluateNode implements Node<InterviewState> {
         vars.put("difficulty", state.getCurrentDifficulty().getLabel());
         vars.put("question", orEmpty(question));
         vars.put("answer", orEmpty(answer));
+        // 告诉 LLM 这个话题还能问几轮。光靠我们自己改判也行，但它提前知道就能给出
+        // 连贯的评语（「这个话题聊得比较透了」），而不是被强行掰到 switch 上
+        vars.put("topicRounds", String.valueOf(state.getTopicTracker().getFollowUpCount() + 1));
+        vars.put("maxFollowUp", String.valueOf(props.getMaxFollowUp()));
 
         try {
             return EvalResultParser.parse(llm.chat(prompts.render("evaluate", vars)));

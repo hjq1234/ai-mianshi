@@ -46,6 +46,10 @@ public class TraceRecorder implements GraphListener<InterviewState> {
             nodeType = "normal";
             status = "ok";
         }
+        // 节点进出太密（一场 10 题的面试能有一两百条），DEBUG 就够；
+        // 真正要一眼看到的是分支决策和出题/评分，那些在 INFO
+        log.debug("图节点 | 面试={} 第 {} 题 | {} | {} ms | {}",
+                state.getRecordId(), state.getQuestionIndex(), node, costMs, status);
         write(state, node, nodeType, null, null, costMs, status, null);
     }
 
@@ -54,6 +58,9 @@ public class TraceRecorder implements GraphListener<InterviewState> {
         if (state.getRecordId() == null) {
             return;
         }
+        // 「图下一步是哪个」就这一行。from 恒为 evaluate，decided 是 deepen/continue/lower/switch/end_loop
+        log.info("图分支决策 | 面试={} 第 {} 题 | {} → {}",
+                state.getRecordId(), state.getQuestionIndex(), from, decided);
         write(state, from, "branch", from, decided, 0L, "ok", null);
     }
 

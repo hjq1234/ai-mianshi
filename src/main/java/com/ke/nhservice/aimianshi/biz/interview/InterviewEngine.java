@@ -86,7 +86,9 @@ public class InterviewEngine {
         state.setMaxQuestions(props.getMaxQuestions());
         state.setCurrentDifficulty(Difficulty.fromLabel(difficulty));
 
-        log.info("用户 {} 开始面试 {}（{} / {} / {}）", userId, recordId, position, domain, difficulty);
+        log.info("开始面试 | 面试={} 用户={} | 岗位={} 公司={} 方向={} 难度={} 简历={}",
+                recordId, userId, position, company, domain, difficulty,
+                resumeId == null ? "未使用" : resumeId);
         // cursor 传 null，引擎会从 start 节点开始
         return run(state, null);
     }
@@ -102,6 +104,9 @@ public class InterviewEngine {
         }
         loaded.state().setAnswer(answer.trim());
         loaded.state().setShouldStop(false);
+        // 回答正文不打：候选人的作答内容没必要进日志，字符数够定位「是不是空提交」
+        log.info("提交回答 | 面试={} 第 {} 题 | 回答 {} 字符",
+                recordId, loaded.state().getQuestionIndex(), answer.trim().length());
         return run(loaded.state(), loaded.cursor());
     }
 
@@ -116,6 +121,8 @@ public class InterviewEngine {
             return RunResult.finished(InterviewGraphFactory.NODE_END, loaded.state());
         }
         loaded.state().setShouldStop(true);
+        log.info("主动结束面试 | 面试={} 已答 {} 题",
+                recordId, loaded.state().getDialogues().size());
         return run(loaded.state(), InterviewGraphFactory.NODE_END);
     }
 
@@ -125,6 +132,7 @@ public class InterviewEngine {
         if (loaded.isFinished()) {
             return RunResult.finished(InterviewGraphFactory.NODE_END, loaded.state());
         }
+        log.info("继续面试 | 面试={} 游标={}", recordId, loaded.cursor());
         return run(loaded.state(), loaded.cursor());
     }
 
@@ -168,7 +176,13 @@ public class InterviewEngine {
 
     private RunResult<InterviewState> run(InterviewState state, String cursor) {
         Execution<InterviewState> execution = new Execution<>(state, cursor);
+        long startedAt = System.currentTimeMillis();
         RunResult<InterviewState> result = graph.run(execution);
+        // 一个请求一行汇总：这次跑到哪停了、游标落在哪、一共花了多久。
+        // 配合 RequestLogFilter 的 HTTP 行，能立刻分出「时间花在 LLM 上」还是「花在别处」
+        log.info("图执行结束 | 面试={} 状态={} 停在={} 游标={} | {} ms",
+                state.getRecordId(), result.status(), result.stoppedAt(),
+                execution.getCursor(), System.currentTimeMillis() - startedAt);
 
         // 无论成功、挂起还是失败，现场都必须落库。
         // 这一步是「已答的题不会丢」的全部保障。

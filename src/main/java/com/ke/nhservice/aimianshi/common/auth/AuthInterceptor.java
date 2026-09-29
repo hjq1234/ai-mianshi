@@ -11,6 +11,9 @@ public class AuthInterceptor implements HandlerInterceptor {
     private static final String HEADER = "Authorization";
     private static final String PREFIX = "Bearer ";
 
+    /** 访问日志过滤器靠这个 request 属性拿到「请求是谁发的」 */
+    public static final String ATTR_USER_ID = "app.userId";
+
     private final TokenUtil tokenUtil;
 
     public AuthInterceptor(TokenUtil tokenUtil) {
@@ -24,7 +27,11 @@ public class AuthInterceptor implements HandlerInterceptor {
                 ? header.substring(PREFIX.length()).trim()
                 : null;
         // verify 失败会抛 BizException(401)，由 GlobalExceptionHandler 统一转成响应
-        UserContext.set(tokenUtil.verify(token));
+        Long userId = tokenUtil.verify(token);
+        UserContext.set(userId);
+        // 顺手存一份到 request 上：ThreadLocal 在 afterCompletion 就清了，
+        // 而 Filter 是在整条链路之外读的，读不到 ThreadLocal
+        request.setAttribute(ATTR_USER_ID, userId);
         return true;
     }
 

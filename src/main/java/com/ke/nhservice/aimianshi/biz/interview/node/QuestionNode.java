@@ -3,6 +3,7 @@ package com.ke.nhservice.aimianshi.biz.interview.node;
 import com.ke.nhservice.aimianshi.biz.interview.HistoryItem;
 import com.ke.nhservice.aimianshi.biz.interview.InterviewState;
 import com.ke.nhservice.aimianshi.biz.interview.prompt.PromptLoader;
+import com.ke.nhservice.aimianshi.common.config.InterviewProperties;
 import com.ke.nhservice.aimianshi.graph.Node;
 import com.ke.nhservice.aimianshi.graph.NodeContext;
 import com.ke.nhservice.aimianshi.graph.NodeResult;
@@ -28,6 +29,7 @@ public class QuestionNode implements Node<InterviewState> {
     public NodeResult execute(NodeContext ctx, InterviewState state) {
         LlmClient llm = ctx.get(LlmClient.class);
         PromptLoader prompts = ctx.get(PromptLoader.class);
+        InterviewProperties props = ctx.get(InterviewProperties.class);
 
         boolean firstQuestion = state.getDialogues().isEmpty() && state.getQuestionIndex() <= 1;
         String template = firstQuestion ? "question_first" : "question_followup";
@@ -41,11 +43,21 @@ public class QuestionNode implements Node<InterviewState> {
         vars.put("resume", orEmpty(state.getResumeSummary()));
         vars.put("history", renderHistory(state));
         vars.put("nextActionHint", orEmpty(state.getNextActionHint()));
+        vars.put("practiceHint", practiceHint(prompts, props, state));
         vars.put("questionIndex", String.valueOf(state.getQuestionIndex()));
         vars.put("maxQuestions", String.valueOf(state.getMaxQuestions()));
 
+        long startedAt = System.currentTimeMillis();
         String question = llm.chat(prompts.render(template, vars)).trim();
-        log.debug("第 {} 题生成完成，{} 字符", state.getQuestionIndex(), question.length());
+        long cost = System.currentTimeMillis() - startedAt;
+
+        // 题目全文要打：出题是整条链上最贵的一步，事后想弄清「这题为什么这么问」只能靠它。
+        // 但 prompt 本身不能打——简历摘要就拼在里面，那是候选人的隐私。
+        log.info("第 {} 题出题完成 | 话题={} 难度={} | {} ms | {} 字符 | 题目：{}",
+                state.getQuestionIndex(),
+                state.getTopicTracker() == null ? "-" : state.getTopicTracker().getCurrentTopic(),
+                state.getCurrentDifficulty().getLabel(),
+                cost, question.length(), question);
 
         if (question.isBlank()) {
             state.setError("出题失败：模型返回了空内容");
@@ -77,5 +89,18 @@ public class QuestionNode implements Node<InterviewState> {
 
     private String orEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * 话题是「项目经历」时附上专门的要求，其余话题给空串。
+     *
+     * 空串不是偷懒：PromptLoader 对「没传的占位符」会原样留着 {practiceHint}，
+     * 所以这里必须无条件给出一个值（哪怕是空的），不能只在命中时才 put。
+     */
+    private String practiceHint(PromptLoader prompts, InterviewProperties props, InterviewState state) {
+        String topic = state.getTopicTracker() == null
+                ? null : state.getTopicTracker().getCurrentTopic();
+        return props.getPracticeTopic() != null && props.getPracticeTopic().equals(topic)
+                ? prompts.load("hint_practice") : "";
     }
 }
