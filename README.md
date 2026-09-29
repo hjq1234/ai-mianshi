@@ -157,8 +157,27 @@ export APP_ASR_MODEL_DIR=D:/models/sense-voice
 没设这个变量时 `/api/asr/status` 返 `available:false`，页面不显示麦克风按钮。
 
 **它是怎么工作的**：浏览器录音 → 页内用 `OfflineAudioContext` 重采样成 16k 单声道 PCM16
-→ `POST /api/asr/transcribe` → 只读的转写块 → 你确认后走**原来那个** `/answer` 接口。
+→ `POST /api/asr/transcribe` → 转写结果落进答题框 → 改完走**原来那个** `/answer` 接口。
 服务端不碰音频格式（不引 FFmpeg），`graph/` 包和评分链路一行没动。
+
+**语音和打字不是两个模式**：就一个答题框，麦克风是它右下角常驻的图标。转写回来是
+**追加**进去，不覆盖你已经打的字。第一版做成了互斥的模式切换（语音模式下把输入框藏起来、
+转写结果只读），实测太别扭 —— 说错一个字就得整段重录。砍了。
+
+**为什么是「录完再转」而不是边说边出字**：因为 `SenseVoiceSmall` 是**离线（非流式）模型**，
+sherpa-onnx 只提供 `OfflineRecognizer` 这一个入口，拿不到中间结果——这不是前端没接好，
+是模型本身的性质决定的。sherpa-onnx 有流式能力，但要换一套模型
+（streaming zipformer / paraformer transducer）和一套 API（`OnlineRecognizer` + 分片喂 `OnlineStream`），
+顺带前端也要从「录完整段 POST」改成「边录边分片上传」，等于把这条链重写一遍。
+
+折中方案有两个，都还没做：
+
+- **伪流式**：保持现在的模型，前面加一个 VAD（silero-vad，另加一个小模型文件）按停顿切段，
+  说完一句就把那句转出来。代价是切点处的字会错，段与段之间没有上下文。
+- **真流式**：换模型 + 换本地推理入口 + 改前端上传协议。
+
+真做的价值主要是「长回答不用等一次转写」；但实话说，一段 30 秒的回答离线转写也就 1 秒出头，
+收益没有看上去那么大。
 
 ## 技术栈
 
@@ -301,8 +320,8 @@ POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {tex
 | 语音依赖两个不在中央仓库的 jar | 换机器 / 清了本地仓库要重跑两次 `install:install-file`，仓库里没有东西记录这一步 |
 | 228 MB 模型不进仓库 | 事实上是「在我机器上能跑」。要真可移植得改成 Python 侧车 + HTTP |
 | 只支持 Windows x64 | `pom.xml` 里写死了 `native-lib-win-x64`。换平台改那一行 artifactId 即可 |
-| 转写结果不可编辑 | 故意的：能改就会边想边改稿，练的就不是口语表达了。要改就重录 |
-| 语音上限 2 分钟 | `app.asr.max-seconds`。到点自动停并转写（等用户自己发现「已经说了两分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
+| 转写结果可以直接改 | 第一版是只读的，理由是「能改就会边想边改稿，练的就不是口语表达了」。真用起来太别扭：说错一个字就得整段重录。现在当草稿用 |
+| 语音上限 `app.asr.max-seconds` | 默认见 `AsrProperties`。到点自动停并转写（等用户自己发现「已经说了几分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
 | token 无法主动失效 | 登出只是前端删 token。单用户自用够用 |
 | 知识库只留接口不实现 | 一期 YAGNI，见文末「还没做的」 |
 | 无注册流程 | 账号直接建库 |
@@ -321,4 +340,8 @@ POST   /api/asr/transcribe          body 是裸 PCM16 小端字节，返回 {tex
 
 - 嵌入知识库检索（`biz/knowledge` 只留了接口）
 - 流式输出（出题要等 5-15 秒，期间前端只能转圈）
-- 流式语音识别（SenseVoiceSmall 本身非流式；而且实时出字会让人盯着屏幕改稿，和练口语的目的相反）
+- 流式语音识别（边说边出字）。**当前模型做不到**：SenseVoiceSmall 是离线模型，
+  sherpa-onnx 只给了 `OfflineRecognizer` 这一个入口，没有对应的流式版本。
+  真要做流式得换模型（streaming zipformer / paraformer transducer）、换客户端
+  （`OnlineRecognizer` + `OnlineStream`）、换前端（分片上传而不是录完整段 POST），
+  是另一件事，不是这次的延续。见「语音答题」那节末尾
