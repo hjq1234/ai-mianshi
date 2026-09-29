@@ -31,4 +31,21 @@ public class AsrConfig {
         }
         return client;
     }
+
+    @Bean
+    public AsrStreamClient asrStreamClient(AsrProperties props) {
+        AsrStreamClient client = new SherpaStreamAsrClient(props);
+
+        // 两条路各自报各自的，**不合成一行**：只下了离线模型是很正常的状态，
+        // 合成一行就说不清缺的是哪个
+        AsrStatus status = client.status();
+        if (status.available()) {
+            log.info("流式语音识别已启用 | 模型目录={}", props.getStream().getModelDir());
+        } else {
+            // 这里用 info 不是 warn，和上面那个不一样：上面不可用意味着「语音整个没了」，
+            // 这里不可用只是「少了一种录音方式」，答题照常
+            log.info("流式语音识别未启用，答题区的语音只有「离线」那一个选项 | {}", status.reason());
+        }
+        return client;
+    }
 }
