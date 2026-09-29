@@ -1,5 +1,6 @@
 package com.ke.nhservice.aimianshi.biz.interview.node;
 
+import com.ke.nhservice.aimianshi.biz.interview.Dialogue;
 import com.ke.nhservice.aimianshi.biz.interview.HistoryItem;
 import com.ke.nhservice.aimianshi.biz.interview.InterviewState;
 import com.ke.nhservice.aimianshi.biz.interview.prompt.PromptLoader;
@@ -42,6 +43,7 @@ public class QuestionNode implements Node<InterviewState> {
         vars.put("topic", orEmpty(state.getTopicTracker().getCurrentTopic()));
         vars.put("resume", orEmpty(state.getResumeSummary()));
         vars.put("history", renderHistory(state));
+        vars.put("askedQuestions", renderAsked(state));
         vars.put("nextActionHint", orEmpty(state.getNextActionHint()));
         vars.put("practiceHint", practiceHint(prompts, props, state));
         vars.put("questionIndex", String.valueOf(state.getQuestionIndex()));
@@ -83,6 +85,24 @@ public class QuestionNode implements Node<InterviewState> {
             sb.append("问：").append(item.getQuestion()).append('\n');
             sb.append("答：").append(item.getAnswer()).append('\n');
             sb.append("得分：").append(item.getScore()).append("\n\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /**
+     * 已经问过的所有题目，只给题目不给答案。
+     *
+     * 原来只靠「最近 2 题」的滑动窗口去重，视野太窄：实测第 5 题和第 8 题都在问
+     * final 域与 this 逸出。这里把全部题面列出来（10 题也就几百字），让 LLM 自己看清哪些问过了。
+     * 答案不带——去重只需要题面，带上答案 prompt 会随轮次线性膨胀。
+     */
+    private String renderAsked(InterviewState state) {
+        if (state.getDialogues().isEmpty()) {
+            return "（还没有问过任何问题）";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Dialogue item : state.getDialogues()) {
+            sb.append(item.getSeq()).append(". ").append(item.getQuestion()).append('\n');
         }
         return sb.toString().trim();
     }

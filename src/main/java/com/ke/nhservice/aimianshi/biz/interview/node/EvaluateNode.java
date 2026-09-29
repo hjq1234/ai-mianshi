@@ -66,8 +66,12 @@ public class EvaluateNode implements Node<InterviewState> {
         // ★ followUpCount 现在是「本话题已经答过几轮」，不是「连续 deepen 了几次」——
         // 旧写法只在 DEEPEN 时 +1，而答得中规中矩时 LLM 给的是 CONTINUE，
         // 计数器永远是 0，这个守卫一次都没触发过（实测 10 题全问在同一个话题上）。
+        // ★ 判的是「算上当前这轮」够没够：followUpCount 是本题之前已答过的轮数，
+        // 所以本题是第 followUpCount + 1 轮。写成 followUpCount >= maxFollowUp 会晚一轮，
+        // 每话题变成问 4 题——而 evaluate.md 里给 LLM 的 topicRounds 就是 followUpCount + 1，
+        // 提示词会说「已问过 3 轮、最多 3 轮」，两边必须同一套口径。
         boolean forced = false;
-        if (tracker.getFollowUpCount() >= props.getMaxFollowUp()) {
+        if (tracker.getFollowUpCount() + 1 >= props.getMaxFollowUp()) {
             forced = suggested != NextAction.SWITCH;
             if (forced) {
                 log.info("话题「{}」已问满 {} 轮，把 LLM 给的 {} 改判为 SWITCH",

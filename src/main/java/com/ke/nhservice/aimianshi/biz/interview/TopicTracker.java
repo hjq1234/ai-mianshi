@@ -15,7 +15,13 @@ public class TopicTracker {
     private List<String> coveredTopics = new ArrayList<>();
     private String currentTopic;
 
-    /** 当前话题连续追问了几次。达到上限就强制换话题（见 EvaluateNode） */
+    /**
+     * 当前话题已经答过几轮。达到上限就强制换话题（见 EvaluateNode）。
+     *
+     * 注意是「本话题答过几轮」而不是「连续追问了几次」：旧实现只在 LLM 给 DEEPEN 时 +1，
+     * 而答得中规中矩时 LLM 给的是 CONTINUE，计数器永远是 0，上限一次都没生效过
+     * （实测一整场 10 题全问在同一个话题上）。
+     */
     private int followUpCount;
 
     /** 挑一个还没聊过的话题；全聊完了就回到第一个，允许循环 */
@@ -45,8 +51,10 @@ public class TopicTracker {
 
     public List<String> getCoveredTopics() { return coveredTopics; }
 
+    /** 和 setAllTopics 一样拷贝一份：直接把传进来的 List 存下来，
+     * 遇到 List.of() 这类不可变实现时 markCovered 会抛 UnsupportedOperationException */
     public void setCoveredTopics(List<String> coveredTopics) {
-        this.coveredTopics = coveredTopics == null ? new ArrayList<>() : coveredTopics;
+        this.coveredTopics = coveredTopics == null ? new ArrayList<>() : new ArrayList<>(coveredTopics);
     }
 
     public String getCurrentTopic() { return currentTopic; }
