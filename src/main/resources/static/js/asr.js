@@ -1,11 +1,16 @@
 /*
- * 语音答题：录音 → 页内重采样成 16k 单声道 PCM16 → 上传 → 只读转写块。
+ * 语音答题：录音 → 页内重采样成 16k 单声道 PCM16 → 上传 → 转写结果**落进答题框**。
  *
  * 为什么在浏览器里重采样：OfflineAudioContext 就是浏览器自带的采样率转换器，
  * 用它降到 16k 之后，服务端完全不用碰音频格式（不引 FFmpeg、不引音频库），
  * 收到的就是 PCM16 字节。
  *
- * 状态机：idle → recording → transcribing → done →（重录回 idle）
+ * 语音和打字**不是两个模式**：答题框只有一个，麦克风是它旁边一个常显的按钮，
+ * 转写回来的文字落进同一个框，当草稿用、能接着改。所以这里没有 asrMode。
+ * 第一版是模式切换（语音模式下把 textarea 藏起来、转写结果只读），砍掉了：
+ * 说错一个字就得整段重录，用起来像在跟 UI 较劲。
+ *
+ * 状态机：idle → recording → transcribing → done →（再录一次回 recording）
  *                                     ↘（出错回 idle + asrError）
  */
 
@@ -16,10 +21,8 @@ function asrData() {
   return {
     asrAvailable: false,   // /status 说的，决定麦克风按钮显不显示
     asrMaxSeconds: 120,    // 也来自 /status，避免前端后端各写一个上限
-    asrMode: 'voice',      // voice | typing
     asrState: 'idle',      // idle | recording | transcribing | done
-    asrText: '',           // 转写结果，只读
-    asrError: '',          // 出错文案，每条都要给出路
+    asrError: '',          // 出错文案
     asrSeconds: 0,
     asrLevel: 0            // 0..1，画电平条
   };
@@ -36,7 +39,6 @@ const ASR_METHODS = {
     } catch (e) {
       this.asrAvailable = false;
     }
-    this.asrMode = this.asrAvailable ? 'voice' : 'typing';
   },
 
   async asrStart() {
@@ -44,8 +46,9 @@ const ASR_METHODS = {
     // 它一 stop 就会触发 onstop，和这次新录的撞在一起
     this.asrCancel();
     this.asrError = '';
-    this.asrText = '';
     this.asrState = 'idle';
+    // 注意这里**不清 answer**：框里可能是已经打了一半、或者上一段转写的草稿，
+    // 重录一次就把它抹掉是最气人的事。转写回来自会追加（见 asrTranscribe）
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia
         || typeof MediaRecorder === 'undefined') {
@@ -133,8 +136,8 @@ const ASR_METHODS = {
    * 丢掉当前录音，**不做转写**。
    *
    * 和 asrStop() 的区别是这条路不转写：asrStop() 之后 recorder.stop() 会触发 onstop，
-   * 而 onstop 里就是「放麦克风 → 上传转写」。所以「改用打字」「提交完清状态」这些
-   * 场景**不能**走 asrStop()，否则用户放弃了这次录音，却还是白发一次转写请求。
+   * 而 onstop 里就是「放麦克风 → 上传转写」。所以「提交完清状态」「重录时先收尾」
+   * 这些场景**不能**走 asrStop()，否则用户放弃了这次录音，却还是白发一次转写请求。
    * 关键动作是先把 onstop 摘掉再 stop()——摘了就没人接这个事件了。
    */
   asrCancel() {
@@ -169,7 +172,11 @@ const ASR_METHODS = {
         this.asrError = '没听到内容。可能是麦克风没收到声音，重录一次试试';
         return;
       }
-      this.asrText = text;
+      // 追加而不是覆盖：先打了两句再补一段说的，覆盖会把打的那两句吃掉 ——
+      // 而且吃掉了**看不出来**（框里内容变了，但没人会记得原来有几句）。
+      // 追加最坏是重复一段，重复看得见，删掉就行
+      const typed = (this.answer || '').trim();
+      this.answer = typed ? typed + ' ' + text : text;
       this.asrState = 'done';
     } catch (e) {
       this.asrState = 'idle';
@@ -177,37 +184,13 @@ const ASR_METHODS = {
     }
   },
 
-  /** 改成打字。录了一半 / 转写失败时都能走这条，不能让人卡在一个坏掉的按钮上 */
-  asrUseTyping() {
-    // 用 asrCancel 不是 asrStop：既然改用打字了，这次录音就该丢掉，不该再转写一遍
-    this.asrCancel();
-    this.asrState = 'idle';
-    this.asrMode = 'typing';
-    this.asrError = '';
-  },
-
-  asrUseVoice() {
-    this.asrMode = 'voice';
-    this.asrError = '';
-  },
-
-  /** 提交后清干净，否则下一题还挂着上一题的转写 */
+  /** 提交后清干净，否则下一题还挂着上一题的录音状态 */
   asrReset() {
+    // 用 asrCancel 不是 asrStop：题都提交了，这次的录音就该丢掉，不该再转写一遍
     this.asrCancel();
     this.asrState = 'idle';
-    this.asrText = '';
     this.asrError = '';
     this.asrSeconds = 0;
-  },
-
-  /**
-   * 该提交哪个字符串。语音模式下是转写文本，打字模式下是 textarea。
-   * 两条路走的是同一个 /answer 接口 —— 后端不知道也不需要知道答案是怎么来的。
-   */
-  asrSubmitText() {
-    return this.asrMode === 'voice' && this.asrState === 'done'
-      ? (this.asrText || '').trim()
-      : (this.answer || '').trim();
   }
 };
 

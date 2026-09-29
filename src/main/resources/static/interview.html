@@ -76,61 +76,47 @@
           {{ turn.error }}
         </div>
 
-        <!-- 两种输入方式，每题都能选。语音的转写结果是**只读**的：这个功能的目的是
-             练口语表达，能改的话人就会边想边改稿，练的就不是表达了。要改就重录 -->
+        <!-- 语音和打字**不是两个模式**：就一个答题框，麦克风是它右下角常显的图标，
+             转写回来的文字落进同一个框、能接着改。
+             第一版是模式切换 + 只读转写块，砍掉了 —— 说错一个字就得整段重录，
+             而且「语音还是打字」这个选择每题都要做一次，用起来像在跟 UI 较劲。 -->
         <div v-if="!turn.finished" class="actions">
-          <div class="asr-bar" v-if="asrAvailable && asrMode === 'voice'">
-            <button class="ghost small" v-if="asrState === 'idle' || asrState === 'done'"
-                    :disabled="submitting" @click="asrStart">🎤 录音</button>
-            <button class="ghost small danger" v-else-if="asrState === 'recording'"
-                    @click="asrStop">⏹ 停止 {{ asrSeconds }}s</button>
-            <span class="ghost small disabled" v-else>
-              <span class="spinner"></span> 转写中…
-            </span>
-
-            <span class="asr-meter" v-if="asrState === 'recording'">
-              <i :style="{ width: (asrLevel * 100) + '%' }"></i>
-            </span>
-            <span class="asr-hint" v-if="asrState === 'recording'">
-              最长 {{ asrMaxSeconds }} 秒，到点自动停
-            </span>
-
-            <button class="ghost small asr-switch" v-if="!submitting && asrState !== 'recording'"
-                    @click="asrUseTyping">改用打字</button>
-          </div>
-
-          <!-- 每条错误都给出路：不能让用户卡在一个坏掉的按钮上 -->
-          <p class="asr-error" v-if="asrError">
-            {{ asrError }}
-            <button class="ghost small" @click="asrUseTyping">改用打字</button>
-          </p>
-
-          <div class="asr-result" v-if="asrMode === 'voice' && asrState === 'done'">
-            <p class="asr-hint">转写结果（只能重录，不能改）</p>
-            <p class="asr-text">{{ asrText }}</p>
-            <div class="actions">
-              <button class="ghost small" @click="asrStart">重录</button>
-              <button :disabled="submitting" @click="submit">
-                <span v-if="submitting" class="spinner"></span>
-                {{ submitting ? '面试官正在评估…' : '提交这个回答' }}
-              </button>
-            </div>
-          </div>
-
-          <template v-if="asrMode === 'typing' || !asrAvailable">
-            <div class="asr-bar" v-if="asrAvailable">
-              <button class="ghost small" @click="asrUseVoice">🎤 改用语音</button>
-            </div>
+          <div class="answer-box">
             <textarea v-model="answer" :disabled="submitting"
-                      placeholder="写下你的回答…（Ctrl+Enter 提交）"
+                      placeholder="写下你的回答…　也可以点右下角麦克风说（Ctrl+Enter 提交）"
                       @keydown.ctrl.enter="submit"></textarea>
-            <div class="actions">
-              <button :disabled="submitting || !submitText" @click="submit">
+
+            <div class="answer-bar">
+              <!-- 左边这半是录音状态的提示。说话时不看着点什么，就不知道麦克风有没有在收 -->
+              <span class="asr-slot">
+                <template v-if="asrState === 'recording'">
+                  <span class="asr-meter"><i :style="{ width: (asrLevel * 100) + '%' }"></i></span>
+                  <span class="asr-hint">{{ asrSeconds }}s / 最长 {{ asrMaxSeconds }}s，到点自动停</span>
+                </template>
+                <span class="asr-hint" v-else-if="asrState === 'transcribing'">
+                  <span class="spinner dark"></span> 转写中…
+                </span>
+                <span class="asr-hint" v-else-if="asrState === 'done'">已转写，可以直接改</span>
+              </span>
+
+              <button type="button" class="icon-btn recording"
+                      v-if="asrAvailable && asrState === 'recording'"
+                      title="停止并转写" @click="asrStop">⏹</button>
+              <button type="button" class="icon-btn" v-else-if="asrAvailable"
+                      :disabled="submitting || asrState === 'transcribing'"
+                      :title="asrState === 'transcribing' ? '转写中…' : '录音回答'"
+                      @click="asrStart">🎤</button>
+
+              <button :disabled="!canSubmit" @click="submit">
                 <span v-if="submitting" class="spinner"></span>
-                {{ submitting ? '面试官正在评估…' : '提交回答' }}
+                {{ submitting ? '面试官正在评估…' : '提交' }}
               </button>
             </div>
-          </template>
+          </div>
+
+          <!-- 出错就给一条人话。这里不再需要「改用打字」那个逃生按钮 ——
+               框一直就在那儿，随手就能接着打 -->
+          <p class="asr-error mt8" v-if="asrError">{{ asrError }}</p>
 
           <p class="muted mt8" v-if="submitting">
             AI 服务繁忙时会自动重试，最长约 1.5 分钟，请勿刷新页面。
@@ -178,8 +164,15 @@
         const t = this.turn;
         return !!(t && t.lastSeq && t.lastQuestion && t.lastQuestion !== t.question);
       },
-      // 该提交哪个字符串。逻辑在 asr.js 里，这里只是把 data 和它接上
-      submitText() { return this.asrSubmitText(); }
+      // 提交的就是框里那段。语音的转写结果也落进同一个框（asr.js 的 asrTranscribe），
+      // 所以这里不用再分「语音模式交 asrText、打字模式交 answer」
+      submitText() { return (this.answer || '').trim(); },
+      // 录音 / 转写进行中不给提交：submit 会把 answer 清空，而转写结果随后才到，
+      // 那段话就落到下一题去了。按钮的 :disabled 和 Ctrl+Enter 走同一个判断
+      canSubmit() {
+        return !this.submitting && !!this.submitText
+          && this.asrState !== 'recording' && this.asrState !== 'transcribing';
+      }
     },
     async mounted() {
       if (!requireLogin()) return;
@@ -217,7 +210,7 @@
       },
       async submit() {
         const submitted = this.submitText;
-        if (this.submitting || !submitted) return;
+        if (!this.canSubmit) return;
         this.submitting = true;
         try {
           const turn = await api('/api/interview/' + this.recordId + '/answer', {

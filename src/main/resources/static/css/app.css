@@ -292,22 +292,65 @@ details.qa .qa-body .dim-grid { margin-top: 8px; }
 /* 用 > * 而不是 > i：页面里写的是 <div :style>，只匹配 i 的话宽度设了也不显示 */
 .progress-bar > * { display: block; height: 100%; background: var(--primary); transition: width .3s; }
 
-/* ────────────────────────── 语音答题 ────────────────────────── */
+/* ────────────────────────── 答题输入区（语音 + 文字同一个框） ────────────────────────── */
 
-.asr-bar {
+/* 一个圆角框装下 textarea 和底下那排按钮 ——
+   麦克风是框里的一个图标，不是另一个模式 */
+.answer-box {
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+/* 焦点环画在外框上，textarea 自己的边框和光圈都去掉。
+   两层框套在一起是这套样式最容易出的丑 */
+.answer-box:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px #2b6cff1a;
+}
+
+.answer-box textarea {
+  padding: 2px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  min-height: 104px;
+  /* 竖向拉伸会把外框撑变形（外框高度是跟着它走的） */
+  resize: none;
+}
+
+.answer-box textarea:focus { border-color: transparent; box-shadow: none; }
+
+.answer-bar {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  /* 提示区空着的时候按钮也不上下跳 */
+  min-height: 34px;
 }
 
-/* 「改用打字 / 改用语音」推到最右边，别和录音按钮挤在一起 */
-.asr-switch { margin-left: auto; }
+/* 提示区。flex: 1 把麦克风和提交推到最右边 */
+.asr-slot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 不加这条，长提示文案会把整条撑出去（flex 子项的 min-width 默认是 auto） */
+  min-width: 0;
+}
+
+.asr-slot .asr-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 电平条：让用户看见麦克风真收到声音了。没它就只能录完才发现是空的 */
 .asr-meter {
-  flex: 1;
-  max-width: 160px;
+  flex: none;
+  width: 90px;
   height: 6px;
   border-radius: 3px;
   background: var(--border);
@@ -322,26 +365,29 @@ details.qa .qa-body .dim-grid { margin-top: 8px; }
 }
 
 /* .small 没定义（只有 button.small），所以这里自己起名 */
-.asr-hint {
-  font-size: 12px;
-  color: var(--muted);
-}
+.asr-hint { font-size: 12px; color: var(--muted); }
 
-/* 一行小字的「转写结果（只能重录，不能改）」上下都要贴紧 */
-.asr-result > .asr-hint { margin: 0 0 6px; }
-
-.asr-text {
-  margin: 0;
-  padding: 12px 14px;
+/* 圆形图标按钮：麦克风。底色跟外框一样，免得看着像贴了块补丁上去 */
+.icon-btn {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  line-height: 1.7;
-  white-space: pre-wrap;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1;
 }
+
+.icon-btn:hover:not(:disabled) { background: var(--bg); }
+.icon-btn.recording { border-color: var(--danger); background: var(--danger); color: #fff; }
+/* 录音中悬停不要变回去 —— 它这会儿是个「停止」按钮，不是可以点第二遍的东西 */
+.icon-btn.recording:hover:not(:disabled) { background: var(--danger); }
 
 .asr-error {
-  margin: 0 0 10px;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid #f5c2c2;
   border-radius: 8px;
@@ -350,13 +396,8 @@ details.qa .qa-body .dim-grid { margin-top: 8px; }
   font-size: 13px;
 }
 
-.asr-error > button { margin-left: 8px; }
-
-/* 转写中那个占位也用 button 的样式，但它不是 button（点不了） */
-button.disabled, .ghost.disabled {
-  opacity: .5;
-  cursor: not-allowed;
-}
+/* 白底上的 spinner。默认那个是给深色按钮用的（白色描边），放这儿看不见 */
+.spinner.dark { border-color: #00000026; border-top-color: var(--muted); }
 
 /* ────────────────────────── 空态 / 加载 ────────────────────────── */
 
