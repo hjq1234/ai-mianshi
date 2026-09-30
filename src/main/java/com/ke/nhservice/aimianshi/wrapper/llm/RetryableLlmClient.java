@@ -28,11 +28,17 @@ public class RetryableLlmClient implements LlmClient {
         this.delegate = delegate;
     }
 
+    /**
+     * 重试逻辑只有这一份。
+     *
+     * ★ 不要在这里再覆写 chat(List)：接口上那个 default chat() 就是转发到这里的，
+     *   另写一份等于同一个类里有两套重试代码，改一处漏一处。
+     */
     @Override
-    public String chat(List<ChatMessage> messages) {
+    public Reply chatDetailed(List<ChatMessage> messages) {
         for (int attempt = 0; ; attempt++) {
             try {
-                return delegate.chat(messages);
+                return delegate.chatDetailed(messages);
             } catch (RetryableException e) {
                 if (attempt >= BACKOFF_MS.length) {
                     log.error("LLM 调用失败 {} 次后放弃: {}", attempt + 1, e.getMessage());

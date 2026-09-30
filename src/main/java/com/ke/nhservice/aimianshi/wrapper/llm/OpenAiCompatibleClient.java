@@ -39,7 +39,7 @@ public class OpenAiCompatibleClient implements LlmClient {
     }
 
     @Override
-    public String chat(List<ChatMessage> messages) {
+    public Reply chatDetailed(List<ChatMessage> messages) {
         if (props.getApiKey() == null || props.getApiKey().isBlank()) {
             throw new NonRetryableException(
                     "未配置 LLM api-key，请设置环境变量 DEEPSEEK_API_KEY 或修改 application.yml 的 app.llm.api-key", null);
@@ -49,6 +49,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         payload.put("model", props.getModel());
         payload.put("messages", messages);
         payload.put("temperature", props.getTemperature());
+        // 默认不发 max_tokens：这个网关的默认上限是多少我们不知道，
+        // 硬设一个反而可能把它改小。要限制就在 yml 里显式配 app.llm.max-tokens
+        if (props.getMaxTokens() > 0) {
+            payload.put("max_tokens", props.getMaxTokens());
+        }
         payload.put("stream", false);
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -86,10 +91,18 @@ public class OpenAiCompatibleClient implements LlmClient {
         log.debug("LLM 调用成功，耗时 {} ms，prompt {} 字符，completion {} 字符",
                 cost, JsonUtil.toJson(messages).length(), response.body().length());
 
-        String content = JsonUtil.fromJson(response.body(), ChatCompletionResponse.class).firstContent();
+        ChatCompletionResponse parsed = JsonUtil.fromJson(response.body(), ChatCompletionResponse.class);
+        String content = parsed.firstContent();
         if (content == null || content.isBlank()) {
             throw new RetryableException("LLM 返回内容为空", null);
         }
-        return content;
+
+        String finishReason = parsed.firstFinishReason();
+        if ("length".equalsIgnoreCase(finishReason)) {
+            // 这条日志留着：页面上那条黄条靠的就是这个字段，
+            // 网关哪天不给 finish_reason 了，从这里能看出来
+            log.warn("LLM 输出被长度上限截断 | 耗时 {} ms，completion {} 字符", cost, content.length());
+        }
+        return new Reply(content, finishReason);
     }
 }
