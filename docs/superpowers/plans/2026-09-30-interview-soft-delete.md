@@ -566,10 +566,12 @@ cd /d/ideaProjects/ai-mianshi
 
 ```bash
 cd /d/ideaProjects/ai-mianshi
-git add README.md docs/superpowers/plans/2026-09-30-interview-soft-delete.md
-git diff --cached --name-only   # ★ 确认没有 application.yml
-git commit -m "docs: 面试记录软删的落地记录与 README 同步"
+git add README.md
+git diff --cached --name-only   # ★ 确认只有 README.md，没有 application.yml
+git commit -m "docs: 面试记录软删的 README 同步"
 ```
+
+（本计划文档在动工前就已经单独提交了，不在这里一起提。）
 
 ---
 
