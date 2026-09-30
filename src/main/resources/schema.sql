@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS t_interview_record (
     total_score REAL,
     report      TEXT,                        -- end 节点生成的综合报告
 
+    -- ★ 软删标记。1 = 已删。查询一律要带 AND deleted = 0（见 InterviewDao 类注释里那 4 处）
+    -- ★ 这一行只对新库生效——CREATE TABLE IF NOT EXISTS 对已存在的表是整条跳过的，
+    --   老库靠 SqliteInitializer 的 ALTER 补
+    deleted     INTEGER NOT NULL DEFAULT 0,
+
     -- ★ 图引擎的两个关键字段
     state_json  TEXT,                        -- InterviewState 序列化快照
     cursor      TEXT,                        -- 引擎游标：下次从哪个节点继续

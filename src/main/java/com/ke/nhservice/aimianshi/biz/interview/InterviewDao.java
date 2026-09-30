@@ -16,6 +16,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 面试记录 / 逐题对话 / 图轨迹的读写。
+ *
+ * ★ 软删：t_interview_record.deleted = 1 表示已删。读这张表的查询**必须**带 AND deleted = 0，
+ *   漏一处不报错，只是那一处还看得见已删的记录。目前需要过滤的恰好四处：
+ *     findRecord / listByUser / countByUser / listFinishedIdsWithAnswers
+ *   加新的查询时，回来把这一行也补上。
+ *
+ * ★ 子表（t_interview_dialogue / t_graph_trace）不用过滤：它们的查询收的都是 record id，
+ *   而那些 id 全出自上面那四处，record 这层挡住了子表就查不出来。
+ *
+ * ★ findRecord 是咽喉：InterviewEngine.loadOwned 只从它取记录，而所有写路径都先过 loadOwned。
+ *   所以过滤了它，已删记录在所有接口上自动 404。
+ */
 @Repository
 public class InterviewDao {
 
@@ -111,7 +125,7 @@ public class InterviewDao {
                 SELECT r.*, substr(coalesce(s.content, ''), 1, ?) AS resume_summary
                 FROM t_interview_record r
                 LEFT JOIN t_resume s ON s.id = r.resume_id
-                WHERE r.id = ?
+                WHERE r.id = ? AND r.deleted = 0
                 """, RECORD_MAPPER, RESUME_SUMMARY_CHARS, id).stream().findFirst();
     }
 
@@ -129,11 +143,24 @@ public class InterviewDao {
                 """, totalScore, report, System.currentTimeMillis(), id);
     }
 
+    /**
+     * 软删：数据留着，只是所有查询都看不见了（见类注释里那四处过滤）。
+     *
+     * 走软删而不是 DELETE FROM，是因为 /stats 的历史均分是按场次聚合的——
+     * 真删会让「删掉一场答砸的面试」顺手把「历史水平（N 场）」也改了。
+     *
+     * 单条 UPDATE，不需要事务（ResumeDao 那个 @Transactional 是因为它一次改两行）。
+     */
+    public void softDelete(Long id) {
+        jdbc.update("UPDATE t_interview_record SET deleted = 1, updated_at = ? WHERE id = ?",
+                System.currentTimeMillis(), id);
+    }
+
     public List<RecordRow> listByUser(Long userId, int limit, int offset) {
         return jdbc.query("""
                 SELECT r.*, '' AS resume_summary
                 FROM t_interview_record r
-                WHERE r.user_id = ?
+                WHERE r.user_id = ? AND r.deleted = 0
                 ORDER BY r.created_at DESC
                 LIMIT ? OFFSET ?
                 """, RECORD_MAPPER, userId, limit, offset);
@@ -141,7 +168,8 @@ public class InterviewDao {
 
     public int countByUser(Long userId) {
         Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM t_interview_record WHERE user_id = ?", Integer.class, userId);
+                "SELECT COUNT(*) FROM t_interview_record WHERE user_id = ? AND deleted = 0",
+                Integer.class, userId);
         return n == null ? 0 : n;
     }
 
@@ -214,7 +242,7 @@ public class InterviewDao {
     public List<Long> listFinishedIdsWithAnswers(Long userId) {
         return jdbc.queryForList("""
                 SELECT r.id FROM t_interview_record r
-                WHERE r.user_id = ? AND r.status = 'finished'
+                WHERE r.user_id = ? AND r.status = 'finished' AND r.deleted = 0
                   AND EXISTS (SELECT 1 FROM t_interview_dialogue d WHERE d.record_id = r.id)
                 ORDER BY r.created_at DESC
                 """, Long.class, userId);
