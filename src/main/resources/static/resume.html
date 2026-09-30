@@ -14,8 +14,9 @@
   <div class="container">
     <div class="card">
       <h2>上传简历</h2>
-      <p class="sub">支持 PDF，不超过 10MB。上传后会立刻抽取文字并存下来，
-        面试出题时作为背景资料。扫描件（图片型 PDF）抽不出文字。</p>
+      <p class="sub">只收 PDF，不超过 10MB。上传后会立刻抽取文字并存下来，
+        面试出题时作为背景资料。<strong>扫描件（图片型 PDF）整页是一张图、抽不到文字，
+        会被挡在这里</strong>；原版是 Word 的话不用另存为 PDF，看下面那张卡片。</p>
 
       <div class="field">
         <input type="file" accept="application/pdf,.pdf" ref="fileInput" @change="onPick">
@@ -28,8 +29,33 @@
     </div>
 
     <div class="card">
-      <h2>已上传的简历</h2>
-      <p class="sub">面试配置里选中的是「默认」那一份。</p>
+      <h2>或者：直接粘贴简历文字</h2>
+      <p class="sub">
+        从 Word 里全选复制，或者从在线简历页面上抄下来，整段粘进来就行。
+        存下来的和上传的简历完全一样，出题、改简历都能用。
+      </p>
+
+      <div class="field">
+        <label>名字（可留空）</label>
+        <input v-model.trim="text.filename" placeholder="不填就按时间自动起一个">
+      </div>
+
+      <div class="field">
+        <label>简历全文</label>
+        <textarea v-model="text.content" style="min-height:240px"
+                  placeholder="把简历内容整段粘到这里…"></textarea>
+        <p class="sub">{{ text.content.length }} 字</p>
+      </div>
+
+      <button :disabled="saving || !text.content.trim()" @click="saveText">
+        <span v-if="saving" class="spinner"></span>
+        {{ saving ? '保存中…' : '保存' }}
+      </button>
+    </div>
+
+    <div class="card">
+      <h2>已存的简历</h2>
+      <p class="sub">上传的和粘贴的都在这里。面试配置里选中的是「默认」那一份。</p>
 
       <div v-if="list.length === 0" class="empty">还没有简历</div>
       <table v-else>
@@ -68,7 +94,9 @@
         topbar: topbarHtml('resume.html'),
         list: [],
         picked: null,
-        uploading: false
+        uploading: false,
+        text: { filename: '', content: '' },
+        saving: false
       };
     },
     async mounted() {
@@ -104,6 +132,24 @@
           toast(e.message, true);
         } finally {
           this.uploading = false;
+        }
+      },
+      // 空名字交给后端按时间起一个，不在这里自己拼一份
+      // （两边各拼一套的话，改格式时只会改一边）
+      async saveText() {
+        this.saving = true;
+        try {
+          await api('/api/resume/text', {
+            method: 'POST',
+            body: { filename: this.text.filename || null, content: this.text.content }
+          });
+          toast('已保存');
+          this.text = { filename: '', content: '' };
+          await this.reload();
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.saving = false;
         }
       },
       async setDefault(id) {

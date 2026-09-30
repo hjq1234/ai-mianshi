@@ -4,11 +4,13 @@ import com.ke.nhservice.aimianshi.biz.resume.Resume;
 import com.ke.nhservice.aimianshi.biz.resume.ResumeService;
 import com.ke.nhservice.aimianshi.common.auth.UserContext;
 import com.ke.nhservice.aimianshi.common.dto.ApiResponse;
+import com.ke.nhservice.aimianshi.common.dto.ResumeTextRequest;
 import com.ke.nhservice.aimianshi.common.dto.ResumeVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,6 +31,13 @@ public class ResumeController {
     @PostMapping("/upload")
     public ApiResponse<ResumeVO> upload(@RequestParam("file") MultipartFile file) {
         Resume resume = resumeService.upload(UserContext.get(), file);
+        return ApiResponse.ok(ResumeVO.of(resume));
+    }
+
+    /** 直接粘贴简历全文存一份，不用先去 Word 里另存为 PDF */
+    @PostMapping("/text")
+    public ApiResponse<ResumeVO> saveText(@RequestBody ResumeTextRequest req) {
+        Resume resume = resumeService.saveText(UserContext.get(), req.filename(), req.content());
         return ApiResponse.ok(ResumeVO.of(resume));
     }
 

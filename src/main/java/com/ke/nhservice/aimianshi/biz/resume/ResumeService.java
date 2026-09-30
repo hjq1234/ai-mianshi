@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @Service
@@ -28,6 +30,18 @@ public class ResumeService {
      *   门槛压到 100：项目自带的 sample-resume.pdf 只有 233 字符，不能被误伤。
      */
     private static final int MIN_CHARS = 100;
+
+    /**
+     * 粘贴进来的正文长度上限。
+     *
+     * 10 万字远超任何一份简历，所以这条在正常使用中永远碰不到；它的作用是挡住
+     * 「误粘了一整本书 / 一大段日志」。**超了直接拒、不截断**：截断会悄悄改掉
+     * 用户粘进来的内容，而后面出题和改稿都对着这份东西说话，比报错难查得多。
+     */
+    private static final int MAX_TEXT_CHARS = 100_000;
+
+    /** 粘贴进来的简历没有文件名，用这个格式按时间起一个显示名 */
+    private static final DateTimeFormatter NAME_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm");
 
     private final ResumeDao resumeDao;
     private final ResumeReviewDao reviewDao;
@@ -64,6 +78,40 @@ public class ResumeService {
                     + "当前不支持 OCR，请换一份带文字层的：用 Word / WPS 另存为 PDF 一般就行");
         }
 
+        return store(userId, filename, content);
+    }
+
+    /**
+     * 直接存一份粘贴进来的简历全文，不经过 PDF。
+     *
+     * 这条入口是给「原版是 Word，不想为传一份简历去另存为 PDF」准备的，
+     * 顺带把「图片型 PDF 抽不出文字」那条死路也绕开了——粘进来的必然是文字。
+     */
+    public Resume saveText(Long userId, String filename, String content) {
+        // 粘进来常带前后的空行和尾随空格，存库前统一剪掉，
+        // 免得「明明粘了内容」却因为整段是空白被判成空
+        String text = content == null ? "" : content.strip();
+        if (text.isEmpty()) {
+            throw new BizException("请把简历内容粘贴进来");
+        }
+        if (text.length() < MIN_CHARS) {
+            throw new BizException("只粘到 " + text.length() + " 个字符，这份简历太短了（至少要 "
+                    + MIN_CHARS + " 个字符）。确认一下是不是只复制到了一行标题");
+        }
+        if (text.length() > MAX_TEXT_CHARS) {
+            throw new BizException("粘贴的内容有 " + text.length() + " 个字符，超过 "
+                    + MAX_TEXT_CHARS + " 的上限，请删掉一些再存");
+        }
+
+        String name = (filename == null || filename.isBlank())
+                ? "粘贴的简历-" + LocalDateTime.now().format(NAME_STAMP)
+                : filename.strip();
+        log.info("粘贴存简历 | 用户={} 名字={} | {} 字符", userId, name, text.length());
+        return store(userId, name, text);
+    }
+
+    /** 落库 + 「第一份自动设为默认」。上传和粘贴两条入口都走这里，省得两份实现走偏 */
+    private Resume store(Long userId, String filename, String content) {
         long id = resumeDao.insert(userId, filename, content);
         // 第一份简历自动设为默认，省掉用户一次点击
         if (resumeDao.countByUser(userId) == 1) {
