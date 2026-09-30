@@ -58,6 +58,7 @@ CP="target/classes;target/test-classes"
 |---|---|---|
 | `PcmCheck` | PCM16 **小端**字节序。小端写成大端不抛异常，只会转出一段看着像话、其实全错的文本，所以必须单独验 | 无 |
 | `AsrCheck` | sherpa-onnx native 真的跑起来了：加载模型、转 `zh.wav` 出中文、连转 20 次结果不坏。**唯一能证明 dll 加载成功的东西** —— 编译通过只说明签名对 | 模型目录 + `zh.wav` |
+| `ResumeReviewCheck` | 简历改稿那条链上两件「写错了不报错」的事：① 改稿提示词的三个占位符有没有漏传（`PromptLoader` 对漏传的占位符是**原样留着**的，错的表现是模型收到一个字面量 `{resume}`、输出变差而页面看不出来）② 产物的抽建议 / 去批注 / 分节 | `$TEMP/cp.txt` |
 
 ```bash
 export APP_ASR_MODEL_DIR=D:/models/sense-voice
@@ -68,6 +69,16 @@ CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
 
 `AsrCheck` 把第一个参数指到一个**空目录**，就是「模型没下也不崩」那条验证：
 应当打出 `available=false` 和一句人话，退出码 1，**不抛异常、不崩进程**。
+
+```bash
+CP="target/classes;target/test-classes;$(cat $TEMP/cp.txt)"
+"$JAVA_HOME/bin/java" -Dstdout.encoding=UTF-8 -cp "$CP" \
+  com.ke.nhservice.aimianshi.checks.ResumeReviewCheck
+```
+
+`ResumeReviewCheck` 也**不起 Spring 容器**（所以在这一节里，不在下面那节）；
+要 `cp.txt` 是因为 `PromptLoader` 用 spring-core 的 `ClassPathResource`、
+`JsonUtil` 用 Jackson 3。它逐条打 `PASS`/`FAIL`，最后一行是总结，退出码 0 才算过。
 
 ### 二、要起 Spring 容器的（`-cp` 里得带上全部依赖）
 
