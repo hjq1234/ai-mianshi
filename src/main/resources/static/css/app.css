@@ -585,3 +585,16 @@ select.asr-mode {
 }
 
 .swim-branch { flex: 0 0 96px; color: var(--muted); font-size: 12px; }
+
+/* ────────────────────────── 改简历 ────────────────────────── */
+
+/* 目标岗位一行：岗位名 + ✕ 排第一行，JD 独占第二行。
+   不用 .row —— 它的 .row > * 有 min-width:160px，套到那个 ✕ 按钮上会撑得很宽 */
+.target-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.target-row textarea { grid-column: 1 / -1; min-height: 64px; }

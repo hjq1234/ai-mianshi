@@ -46,6 +46,7 @@
             </td>
             <td class="muted">{{ fmtTime(r.createdAt) }}</td>
             <td class="right">
+              <button class="small ghost" @click="goReview(r.id)">改简历</button>
               <button v-if="!r.isDefault" class="small ghost" @click="setDefault(r.id)">设为默认</button>
               <button class="small danger" @click="remove(r.id)">删除</button>
             </td>
@@ -112,6 +113,11 @@
         } catch (e) {
           toast(e.message, true);
         }
+      },
+      // 目标岗位、参考哪几场面试这些参数塞不进顶部导航，所以这页要带简历 id 进去。
+      // 顶部导航那三项（topbarHtml 里写死的）不动
+      goReview(id) {
+        location.href = 'resume-review.html?resumeId=' + id;
       },
       async remove(id) {
         if (!confirm('确定删除这份简历？')) return;

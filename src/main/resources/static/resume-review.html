@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>改简历 · AI 模拟面试</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <div v-html="topbar"></div>
+
+  <div class="container-wide">
+    <!-- 生成表单 -->
+    <div class="card">
+      <h2>改简历</h2>
+      <p class="sub">
+        对着目标岗位，给出逐条修改建议和一份改写的参考稿。
+        模型一次要写出整份稿子，一般 15-40 秒，期间别关页面。
+      </p>
+
+      <div class="field">
+        <label>目标岗位（至少一条，岗位名必填）</label>
+        <div class="target-row" v-for="(t, i) in form.targets" :key="i">
+          <input v-model.trim="t.title" placeholder="岗位名，例如：Java 后端开发">
+          <button class="small danger" :disabled="form.targets.length <= 1"
+                  @click="removeTarget(i)">✕</button>
+          <textarea v-model="t.jd"
+                    placeholder="JD 原文，可留空（留空就按这个岗位的通用标准来改）"></textarea>
+        </div>
+        <button class="small ghost" @click="addTarget">+ 再加一条</button>
+      </div>
+
+      <div class="field">
+        <label>参考哪些面试记录（可不选）</label>
+        <p class="sub">
+          选中的场次会作为「你实际答成什么样」的证据喂给模型，
+          它给出的建议就会点到你的弱项话题上。
+        </p>
+        <div v-if="interviews.length === 0" class="empty">还没有面试记录</div>
+        <table v-else>
+          <thead>
+            <tr>
+              <th style="width:36px"></th><th>岗位</th><th>方向</th><th>已答</th>
+              <th>均分</th><th>状态</th><th>开始时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in interviews" :key="r.id">
+              <td><input type="checkbox" :value="r.id" v-model="form.interviewIds"></td>
+              <td>{{ r.position || '-' }}</td>
+              <td>{{ r.domain || '-' }}</td>
+              <td>{{ r.dialogueCount }} 题</td>
+              <td>
+                <span class="score" :class="scoreClass(r.totalScore)">
+                  {{ fmtScore(r.totalScore) }}
+                </span>
+              </td>
+              <td>
+                <span v-if="r.status === 'finished'" class="tag success">已结束</span>
+                <span v-else class="tag warning">进行中</span>
+              </td>
+              <td class="muted">{{ fmtTime(r.createdAt) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <button :disabled="generating" @click="generate">
+        <span v-if="generating" class="spinner"></span>
+        {{ generating ? '生成中…一般 15-40 秒' : '生成修改建议' }}
+      </button>
+    </div>
+
+    <!-- 历史 -->
+    <div class="card">
+      <h2>历史改稿</h2>
+      <p class="sub">按简历各留一份历史。批注和参考稿都存着，随时回看、可导出。</p>
+
+      <div v-if="history.length === 0" class="empty">这份简历还没生成过</div>
+      <table v-else>
+        <thead>
+          <tr><th>时间</th><th>建议</th><th>目标岗位</th><th>参考面试</th><th>模型</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="h in history" :key="h.id">
+            <td class="muted">{{ fmtTime(h.createdAt) }}</td>
+            <td>
+              {{ h.suggestionCount }} 条
+              <span v-if="h.truncated" class="tag warning">被截断</span>
+            </td>
+            <td>{{ targetText(h.targets) }}</td>
+            <td>{{ h.interviewCount ? h.interviewCount + ' 场' : '-' }}</td>
+            <td class="muted">{{ h.model || '-' }}</td>
+            <td class="right">
+              <button class="small" @click="view(h.id)">查看</button>
+              <button class="small danger" @click="remove(h.id)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <template v-if="detail">
+      <!-- 截断提示。没有这一条的话，现象是「参考稿戛然而止」，会以为是模型笨 -->
+      <div v-if="detail.truncated" class="card"
+           style="background:#fdf3e3;border-color:#f6e0bd">
+        <strong>这次输出被长度上限截断了。</strong>
+        下面的建议和参考稿只到断掉的地方为止（前面的建议都存下来了）。
+        想拿到完整的，在 <code>application.yml</code> 里加一行
+        <code>app.llm.max-tokens: 8192</code>（或更大）再生成一次。
+      </div>
+
+      <!-- 修改建议 -->
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:12px">
+          <h2 style="margin:0">修改建议</h2>
+          <span class="muted">{{ detail.suggestions.length }} 条</span>
+          <span style="flex:1"></span>
+          <button class="ghost small" @click="exportMarkdown">导出 Markdown（批注在原位）</button>
+        </div>
+        <p class="sub">
+          {{ detail.filename }} · {{ fmtTime(detail.createdAt) }} ·
+          {{ targetText(detail.targets) }}
+        </p>
+
+        <div v-if="detail.suggestions.length === 0" class="empty">
+          这次一行批注都没抽到（生成失败，或者模型没按约定格式输出）。参考稿还能看。
+        </div>
+        <!-- v-else 和 v-for 不放在同一个元素上：那样 v-if 的优先级会盖过 v-for，
+             看着能跑但容易踩坑，包一层 template 就没歧义 -->
+        <template v-else>
+          <template v-for="(group, section) in groupedSuggestions" :key="section">
+            <h3>{{ section }}（{{ group.length }} 条）</h3>
+            <ol>
+              <li v-for="(s, i) in group" :key="i">{{ s.text }}</li>
+            </ol>
+          </template>
+        </template>
+      </div>
+
+      <!-- 参考稿 -->
+      <div class="card">
+        <h2>参考稿</h2>
+        <p class="sub">
+          按建议改写过的一版。<strong>【方括号】里是模型不敢替你编的数字或细节，
+          投出去之前必须换成真的。</strong>
+        </p>
+        <div class="report" v-html="renderMarkdown(detail.document)"></div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="js/app.js"></script>
+<script>
+  const { createApp } = Vue;
+
+  createApp({
+    data() {
+      return {
+        // 高亮「我的简历」：这一页是从简历页进来的，同属简历那件事
+        topbar: topbarHtml('resume.html'),
+        resumeId: null,
+        form: { targets: [{ title: '', jd: '' }], interviewIds: [] },
+        interviews: [],
+        history: [],
+        detail: null,
+        generating: false
+      };
+    },
+    computed: {
+      /**
+       * 按 section 分组。键的插入顺序就是产物里的出现顺序
+       * （主稿各章节在前，「投「X」的额外调整」在后），所以渲染出来是有序的。
+       */
+      groupedSuggestions() {
+        const out = {};
+        for (const s of (this.detail && this.detail.suggestions) || []) {
+          const key = s.section || '其他';
+          (out[key] = out[key] || []).push(s);
+        }
+        return out;
+      }
+    },
+    async mounted() {
+      if (!requireLogin()) return;
+      fillNickname();
+      this.resumeId = new URLSearchParams(location.search).get('resumeId');
+      if (!this.resumeId) {
+        toast('没指定简历，回「我的简历」点「改简历」进来', true);
+        return;
+      }
+      try {
+        await Promise.all([this.loadInterviews(), this.loadHistory()]);
+      } catch (e) {
+        toast(e.message, true);
+      }
+    },
+    methods: {
+      fmtTime,
+      fmtScore,
+      scoreClass,
+      renderMarkdown,
+
+      targetText(targets) {
+        return (targets || []).map(t => t.title).filter(Boolean).join('、') || '-';
+      },
+      addTarget() {
+        this.form.targets.push({ title: '', jd: '' });
+      },
+      removeTarget(i) {
+        // 至少留一条，否则「+ 再加一条」会成为唯一的出路
+        if (this.form.targets.length <= 1) return;
+        this.form.targets.splice(i, 1);
+      },
+      async loadInterviews() {
+        this.interviews = await api('/api/interview/list?page=1&size=100');
+      },
+      async loadHistory() {
+        this.history = await api('/api/resume-review?resumeId=' + this.resumeId);
+      },
+      async generate() {
+        // 空岗位名不进请求：后端也拦，但没必要白等一次往返
+        const targets = this.form.targets.filter(t => (t.title || '').trim());
+        if (targets.length === 0) {
+          toast('至少填一个目标岗位', true);
+          return;
+        }
+        this.generating = true;
+        try {
+          this.detail = await api('/api/resume-review', {
+            method: 'POST',
+            body: {
+              resumeId: Number(this.resumeId),
+              targets: targets.map(t => ({
+                title: t.title.trim(),
+                jd: (t.jd || '').trim() || null
+              })),
+              interviewIds: this.form.interviewIds
+            }
+          });
+          await this.loadHistory();
+          toast('生成完成');
+        } catch (e) {
+          toast(e.message, true);
+        } finally {
+          this.generating = false;
+        }
+      },
+      async view(id) {
+        try {
+          this.detail = await api('/api/resume-review/' + id);
+        } catch (e) {
+          toast(e.message, true);
+        }
+      },
+      async remove(id) {
+        if (!confirm('确定删掉这次改稿？')) return;
+        try {
+          await api('/api/resume-review/' + id, { method: 'DELETE' });
+          // 删的正好是正在看的那份，就把详情收掉，
+          // 否则页面上留着一份已经不在库里的东西
+          if (this.detail && this.detail.id === id) this.detail = null;
+          await this.loadHistory();
+          toast('已删除');
+        } catch (e) {
+          toast(e.message, true);
+        }
+      },
+      exportMarkdown() {
+        const d = this.detail;
+        if (!d) return;
+        const stamp = fmtTime(d.createdAt).replace(/[-: ]/g, '');
+        const name = safeFileName('简历改稿-' + (d.filename || '').replace(/\.pdf$/i, '') + '-' + stamp);
+        // ★ 导出的是**原始 markdown**（批注在原位），不是页面上那份去掉批注的 document：
+        //   拿去对照着改的时候，建议必须贴着它要改的那一段
+        downloadTextFile(name + '.md', d.markdown);
+        toast('已导出 ' + name + '.md');
+      }
+    }
+  }).mount('#app');
+</script>
+
+</body>
+</html>
