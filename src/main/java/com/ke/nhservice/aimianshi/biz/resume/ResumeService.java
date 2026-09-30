@@ -18,6 +18,17 @@ public class ResumeService {
 
     private static final long MAX_BYTES = 10L * 1024 * 1024;
 
+    /**
+     * 抽出的正文短于这个长度，就不像一份简历。
+     *
+     * ★ 实测踩过：招聘平台导出的图片型 PDF（整页是一张图）里，PDFBox 唯一能抽到的
+     *   是页面上那串系统编号——比如 40 个字符的 "c46000c8…"。
+     *   它**不是空白**，所以只挡 isBlank() 的话这份简历会被收下，
+     *   然后出题、改简历都对着这串编号说话，要等烧完一次调用才发现。
+     *   门槛压到 100：项目自带的 sample-resume.pdf 只有 233 字符，不能被误伤。
+     */
+    private static final int MIN_CHARS = 100;
+
     private final ResumeDao resumeDao;
     private final ResumeReviewDao reviewDao;
 
@@ -46,6 +57,11 @@ public class ResumeService {
         }
         if (content.isBlank()) {
             throw new BizException("没能从这份 PDF 里提取到文字，可能是扫描件（图片型 PDF），当前不支持 OCR");
+        }
+        if (content.length() < MIN_CHARS) {
+            throw new BizException("这份 PDF 基本没有文字层（只抽到 " + content.length()
+                    + " 个字符），多半是图片型 PDF——招聘平台导出的常见这种。"
+                    + "当前不支持 OCR，请换一份带文字层的：用 Word / WPS 另存为 PDF 一般就行");
         }
 
         long id = resumeDao.insert(userId, filename, content);
