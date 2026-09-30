@@ -278,6 +278,21 @@ src/main/resources/
 
 数据文件默认在 `./data/interview.db`，删掉即可重置。
 
+### 删除是软删
+
+`t_interview_record` 上有个 `deleted` 列（软删标记）。删除面试记录是**标记隐藏，不是真删**：
+数据留着，只是所有查询都带 `AND deleted = 0`。这么做是因为 `/stats` 的历史均分按场次聚合，
+真删会让「删掉一场答砸的面试」顺手把「历史水平（N 场）」也改了。
+
+需要过滤的读查询恰好四处（`findRecord` / `listByUser` / `countByUser` / `listFinishedIdsWithAnswers`），
+都在 `InterviewDao`，类注释里列着——**加新查询时要回去补**，漏一处不报错，
+只是那一处还看得见已删的记录。子表（`t_interview_dialogue` / `t_graph_trace`）不用过滤：
+它们的查询收的都是 record id，而那些 id 全出自上面这四处之一，record 这层挡住了子表就查不出来。
+
+老库（已经建过表的）靠 `SqliteInitializer` 在启动时探测缺列 + `ALTER` 自动补上，
+因为 `CREATE TABLE IF NOT EXISTS` 对已存在的表是整条跳过的。要真删就手工
+`DELETE FROM` 三张表（软删的意义就是数据都留着，不做回收站界面）。
+
 ### 出题从哪来
 
 `app.interview.topics` 是话题池，`switch` 分支从这里挑还没聊过的话题。
@@ -307,6 +322,7 @@ POST   /api/interview/start         {resumeId, position, company, domain, diffic
 POST   /api/interview/{id}/answer   {answer}
 POST   /api/interview/{id}/finish   用户主动结束
 POST   /api/interview/{id}/resume   从游标继续，不需要新答案
+DELETE /api/interview/{id}          软删一条面试记录（标记隐藏，数据留着）
 GET    /api/interview/{id}/state    刷新页面用，不推进图
 GET    /api/interview/list
 GET    /api/interview/{id}/detail   复盘详情（含 dimensionAverages 本场五维均分）
@@ -389,6 +405,7 @@ POST   /api/asr/stream/stop         流式：结束会话 → {finalText}（最�
 | 转写结果可以直接改 | 第一版是只读的，理由是「能改就会边想边改稿，练的就不是口语表达了」。真用起来太别扭：说错一个字就得整段重录。现在当草稿用 |
 | 语音上限 `app.asr.max-seconds` | 默认见 `AsrProperties`。到点自动停并转写（等用户自己发现「已经说了几分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
 | token 无法主动失效 | 登出只是前端删 token。单用户自用够用 |
+| 删除面试记录是软删（标记隐藏） | 数据留着，`t_interview_record.deleted = 1`。真删要手工 `DELETE FROM` 三张表；不做回收站界面，要找回来 `UPDATE … SET deleted = 0` |
 | 知识库只留接口不实现 | 一期 YAGNI，见文末「还没做的」 |
 | 无注册流程 | 账号直接建库 |
 | 部署前必须改 `app.auth.secret` | 默认值是 `change-me-before-deploy-please`，不改等于谁都能签 token |
@@ -408,3 +425,5 @@ POST   /api/asr/stream/stop         流式：结束会话 → {finalText}（最�
 - 流式输出（出题要等 5-15 秒，期间前端只能转圈）
 - 给流式的定稿句子补标点和数字规整（挂 `OfflinePunctuation`，见「语音答题」那节末尾）
 - 用 VAD 让离线那条也「按停顿切段」（现在的折中是流式那条承担了这件事）
+
+claude --resume 8f9b2c6a-f53f-4029-8b0f-b5d1a0456b24
