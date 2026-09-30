@@ -48,6 +48,7 @@
               <button v-if="r.status === 'finished'" class="small"
                       @click="go('report.html', r.id)">查看复盘</button>
               <button v-else class="small" @click="go('interview.html', r.id)">继续面试</button>
+              <button class="small danger" @click="remove(r.id)">删除</button>
             </td>
           </tr>
         </tbody>
@@ -84,7 +85,19 @@
       fmtTime,
       fmtScore,
       scoreClass,
-      go(page, id) { location.href = page + '?id=' + id; }
+      go(page, id) { location.href = page + '?id=' + id; },
+
+      async remove(id) {
+        if (!confirm('确定删除这条面试记录？')) return;
+        try {
+          await api('/api/interview/' + id, { method: 'DELETE' });
+          // 从本地列表摘掉那一行，不整页刷新：重载会把滚动位置也弄丢
+          this.list = this.list.filter(r => r.id !== id);
+          toast('已删除');
+        } catch (e) {
+          toast(e.message, true);
+        }
+      }
     }
   }).mount('#app');
 </script>
