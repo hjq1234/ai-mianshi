@@ -16,6 +16,7 @@ import com.ke.nhservice.aimianshi.common.dto.RecordListItemVO;
 import com.ke.nhservice.aimianshi.common.dto.StartInterviewRequest;
 import com.ke.nhservice.aimianshi.graph.RunResult;
 import com.ke.nhservice.aimianshi.graph.RunStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -66,6 +67,16 @@ public class InterviewController {
     @PostMapping("/{id}/resume")
     public ApiResponse<InterviewTurnVO> resume(@PathVariable Long id) {
         return ApiResponse.ok(toTurnVO(engine.resume(UserContext.get(), id)));
+    }
+
+    /**
+     * 删除一条面试记录（软删）。
+     * 和 /api/resume/{id} 那条一一对应：都是走 service 的归属校验 + 一个 DAO 写操作。
+     */
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> delete(@PathVariable Long id) {
+        engine.delete(UserContext.get(), id);
+        return ApiResponse.ok();
     }
 
     /** 刷新页面后拉当前状态，不推进图 */

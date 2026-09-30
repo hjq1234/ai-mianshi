@@ -169,6 +169,21 @@ public class InterviewEngine {
         return dao.listDialogues(recordId);
     }
 
+    /**
+     * 软删一场面试记录。
+     *
+     * 复用 requireRecord 而不是自己写归属校验：它里面就是 loadOwned，
+     * 「不存在」和「不是你的」都统一抛 notFound（面试记录不存在），
+     * 所以已删的记录在这里自动也是 404——对同一条再删一次会 404，是正确行为不是 bug。
+     *
+     * 不判断状态：进行中的也能删（半途放弃的正是最该清理的那类）。
+     */
+    public void delete(Long userId, Long recordId) {
+        requireRecord(userId, recordId);
+        dao.softDelete(recordId);
+        log.info("删除面试记录 | 面试={} 用户={}", recordId, userId);
+    }
+
     public List<TraceRow> traces(Long recordId) {
         return dao.listTraces(recordId);
     }
