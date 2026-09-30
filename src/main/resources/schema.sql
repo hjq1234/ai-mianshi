@@ -76,9 +76,26 @@ CREATE TABLE IF NOT EXISTS t_graph_trace (
     created_at INTEGER NOT NULL
 );
 
+-- 简历改稿。一次生成一行，按简历留历史。
+-- ★ 这是一张**新表**：CREATE TABLE IF NOT EXISTS 直接建就行，
+--   不需要像上面 deleted 列那样靠 SqliteInitializer 补 ALTER（那是对已存在的表加列）
+CREATE TABLE IF NOT EXISTS t_resume_review (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          INTEGER NOT NULL,
+    resume_id        INTEGER NOT NULL,            -- 改的是哪份简历
+    markdown         TEXT    NOT NULL,            -- LLM 全文，批注（> 建议：）留在原位
+    suggestion_count INTEGER NOT NULL DEFAULT 0,  -- 写入时算一次，列表页不用拖全文
+    targets_json     TEXT,                        -- [{"title":"Java 后端","jd":"…"}]，至少一条
+    interview_ids    TEXT,                        -- 参考了哪几场（逗号分隔），没选为 NULL
+    model            TEXT,                        -- 换模型后能看出这条是哪个生成的
+    truncated        INTEGER NOT NULL DEFAULT 0,  -- 1 = 输出被长度上限截断
+    created_at       INTEGER NOT NULL
+);
+
 -- (record_id, seq) 唯一：evaluate 节点失败重跑时用 INSERT OR REPLACE 覆盖，
 -- 避免同题写出两条对话记录
 CREATE UNIQUE INDEX IF NOT EXISTS uk_dialogue_record_seq ON t_interview_dialogue(record_id, seq);
 CREATE INDEX IF NOT EXISTS idx_trace_record  ON t_graph_trace(record_id, seq);
 CREATE INDEX IF NOT EXISTS idx_record_user   ON t_interview_record(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_resume_user   ON t_resume(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_review_resume ON t_resume_review(resume_id, created_at DESC);
