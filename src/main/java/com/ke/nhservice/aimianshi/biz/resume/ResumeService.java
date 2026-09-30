@@ -2,7 +2,10 @@ package com.ke.nhservice.aimianshi.biz.resume;
 
 import com.ke.nhservice.aimianshi.common.exception.BizException;
 import com.ke.nhservice.aimianshi.wrapper.pdf.PdfTextExtractor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -11,12 +14,16 @@ import java.util.List;
 @Service
 public class ResumeService {
 
+    private static final Logger log = LoggerFactory.getLogger(ResumeService.class);
+
     private static final long MAX_BYTES = 10L * 1024 * 1024;
 
     private final ResumeDao resumeDao;
+    private final ResumeReviewDao reviewDao;
 
-    public ResumeService(ResumeDao resumeDao) {
+    public ResumeService(ResumeDao resumeDao, ResumeReviewDao reviewDao) {
         this.resumeDao = resumeDao;
+        this.reviewDao = reviewDao;
     }
 
     public Resume upload(Long userId, MultipartFile file) {
@@ -58,9 +65,19 @@ public class ResumeService {
         resumeDao.setDefault(userId, resumeId);
     }
 
+    /**
+     * 删一份简历，连带删掉它的全部改稿。
+     *
+     * ★ 事务必须在 service 这一层：t_resume 是物理删、**没有外键级联**，
+     *   两张表的删除要么一起成功要么一起失败（否则简历没了、改稿还在库里当孤儿）。
+     *   ResumeDao.setDefault 那个 @Transactional 是「一张表的两条语句」，这里是两张表。
+     */
+    @Transactional
     public void delete(Long userId, Long resumeId) {
         requireOwned(userId, resumeId);
+        int removed = reviewDao.deleteByResume(resumeId);
         resumeDao.delete(resumeId);
+        log.info("删除简历 | 简历={} 用户={} | 连带删掉 {} 条改稿", resumeId, userId, removed);
     }
 
     /** 面试开始时解析简历文本用 */
