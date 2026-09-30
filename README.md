@@ -257,8 +257,8 @@ src/main/java/com/ke/nhservice/aimianshi/
 src/main/resources/
 ├── application.yml 配置（含话题池）
 ├── schema.sql      建表脚本，启动自动执行
-├── prompts/        9 个提示词（改提示词不用改 Java）
-└── static/         6 个页面
+├── prompts/        10 个提示词（改提示词不用改 Java）
+└── static/         7 个页面
     ├── js/app.js     全局工具 + 复盘导出
     ├── js/charts.js  复盘页四张图（三张 ECharts + 泳道图拼 HTML）
     └── css/app.css
@@ -266,7 +266,7 @@ src/main/resources/
 
 ## 数据库
 
-五张表，都在 `schema.sql` 里：
+六张表，都在 `schema.sql` 里：
 
 | 表 | 作用 |
 |---|---|
@@ -275,6 +275,7 @@ src/main/resources/
 | `t_interview_record` | 面试记录。**`state_json` + `cursor` 是断点续传的关键** |
 | `t_interview_dialogue` | 逐题问答 + 评分 + **图的分支决策** |
 | `t_graph_trace` | 节点级执行轨迹，用来还原图实际走的路径 |
+| `t_resume_review` | 简历改稿。`markdown` 是 LLM 全文（批注在原位），其余是元信息 |
 
 数据文件默认在 `./data/interview.db`，删掉即可重置。
 
@@ -293,6 +294,16 @@ src/main/resources/
 因为 `CREATE TABLE IF NOT EXISTS` 对已存在的表是整条跳过的。要真删就手工
 `DELETE FROM` 三张表（软删的意义就是数据都留着，不做回收站界面）。
 
+### 改稿是物理删
+
+`t_resume_review` **没有**软删标记：改稿是派生产物，没有任何聚合依赖它
+（不像面试记录——`/stats` 的历史均分按场次聚合，真删会顺手改掉「历史水平」）。
+
+删一份简历时会**连带删掉它的全部改稿**，靠 `ResumeService.delete` 上的 `@Transactional`：
+`t_resume` 是物理删、没有外键级联，不这么删就会留下孤儿行——按 `resume_id` 永远查不到它们，
+但行还在库里占着地方。事务边界放 service 而不是 DAO，是因为这里跨了两张表
+（`ResumeDao.setDefault` 那个 `@Transactional` 是「一张表的两条语句」）。
+
 ### 出题从哪来
 
 `app.interview.topics` 是话题池，`switch` 分支从这里挑还没聊过的话题。
@@ -305,6 +316,44 @@ src/main/resources/
 这个维度有依据——话题池全是纯概念时，LLM 只能凭空凑一个中间分。
 
 同一个话题最多问 `max-follow-up`（默认 3）题，问满强制换话题，不完全听 LLM 的。
+
+### 改简历
+
+对着目标岗位（可以加多条，每条 = 岗位名必填 + JD 可空）和**可选**的几场面试记录，
+一次 LLM 调用出一份纯 Markdown：一份主稿 + 每个岗位一节「投「X」要额外改什么」。
+建议写成 `> 建议：` 行**贴在它要改的那一段之前**，所以批注是在原位的。
+
+**为什么是 Markdown 而不是 JSON**：这份产物很长，最容易撞输出长度上限。
+`EvalResultParser.extractJson` 取的是第一个 `{` 到最后一个 `}`，响应被截掉尾巴时
+整次生成全废；Markdown 的截断只是降级——参考稿写到一半，前面的建议都在库里。
+
+`ChatCompletionResponse` 会读 `finish_reason`，是 `length` 就把 `truncated` 存成 1，
+页面上给一条黄条提示去调大 `app.llm.max-tokens`（这个字段**默认不发**，
+因为我们不知道网关的默认上限是多少，硬设一个反而可能把它改小）。
+`finish_reason` 是项目里唯一一个多词字段，注解**必须**写成 `@JsonProperty("finish_reason")`
+——没有配 `property-naming-strategy`，Jackson 走默认的 camelCase，声明成 `finishReason`
+是绑不上的，而那样**不报任何错**，只是 `truncated` 永远是 0。
+
+**页面上的三个视图都是现派生的**（同一份产物，都不落库）：
+
+| 字段 | 用途 |
+|---|---|
+| `markdown` | 原始全文，批注在原位 —— **导出 .md 用这个** |
+| `document` | 去掉批注行、也去掉因此空掉的小节标题 —— 页面渲染参考稿用这个 |
+| `suggestions` | `[{section, text}]`，`section` 是它上面最近的 `##` 标题 —— 建议面板按它分组 |
+
+派生只有 `ResumeReviewParser` **一处**实现，不然「怎么抽建议」会在 Java 和 JS 里各写一份。
+顺带好处是 `document` 里没有 `>` 行了，页面直接用现成的 `renderMarkdown` 就行
+（它不支持引用块，第一步就把 `>` 转义掉）。
+
+按 `##` 分组而不是笼统标成「主稿」，是因为主稿里的标题就是简历自己的章节——
+面板上显示「项目经历那 3 条」，比一个「主稿 12 条」的大堆有用。
+这也正是提示词要求模型给每个大块起 `##` 标题的原因：不给的话，
+主稿部分的批注会全部掉进「简历开头」那一组。
+
+**模型不许编数字**：提示词里明确要求，凡是不确定的数字、指标、项目名、技术栈，
+一律写成【方括号】占位让他自己填。参考稿里出现【】是**正常的**，那是在提醒填真的
+——这份简历是要拿去投的，编出来的东西面试一问就穿帮。
 
 ## 接口
 
@@ -328,6 +377,11 @@ GET    /api/interview/list
 GET    /api/interview/{id}/detail   复盘详情（含 dimensionAverages 本场五维均分）
 GET    /api/interview/{id}/trace    节点轨迹
 GET    /api/interview/stats         历史五维均分，给雷达图做对比
+
+POST   /api/resume-review              {resumeId, targets:[{title,jd}], interviewIds:[…]} → 详情
+GET    /api/resume-review?resumeId=X   某份简历的历史改稿（不含全文）
+GET    /api/resume-review/{id}         详情（markdown + document + suggestions）
+DELETE /api/resume-review/{id}         删掉一次改稿（物理删）
 
 GET    /api/asr/status              两条语音路各自的可用性（平铺的 available / streamAvailable）
 POST   /api/asr/transcribe          离线：body 是裸 PCM16 小端字节（整段），返回 {text}
@@ -406,6 +460,9 @@ POST   /api/asr/stream/stop         流式：结束会话 → {finalText}（最�
 | 语音上限 `app.asr.max-seconds` | 默认见 `AsrProperties`。到点自动停并转写（等用户自己发现「已经说了几分钟」不如替她停掉——停了还能转写，超了服务端直接拒，那段话就白说了） |
 | token 无法主动失效 | 登出只是前端删 token。单用户自用够用 |
 | 删除面试记录是软删（标记隐藏） | 数据留着，`t_interview_record.deleted = 1`。真删要手工 `DELETE FROM` 三张表；不做回收站界面，要找回来 `UPDATE … SET deleted = 0` |
+| 改稿是物理删，删简历连带删 | 改稿是派生产物，没有任何聚合依赖它，真删就是真删（和面试记录正好相反，理由见上面「改稿是物理删」） |
+| 改稿可能被长度上限截断 | 页面上给一条黄条、历史里标「被截断」。想更长就配 `app.llm.max-tokens`（默认**不发**这个字段——不知道网关默认是多少，硬设可能把它改小）。降级设计保证截断时前面的建议都还在 |
+| 多岗位是「一份主稿 + 每岗位一节补丁」 | 不是每个岗位一份完整稿：输出 ×N 太容易截断。这也正是简历真实的维护方式——一份主简历 + 每个岗位的补丁 |
 | 知识库只留接口不实现 | 一期 YAGNI，见文末「还没做的」 |
 | 无注册流程 | 账号直接建库 |
 | 部署前必须改 `app.auth.secret` | 默认值是 `change-me-before-deploy-please`，不改等于谁都能签 token |
