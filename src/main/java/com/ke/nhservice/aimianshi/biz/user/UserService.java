@@ -2,6 +2,7 @@ package com.ke.nhservice.aimianshi.biz.user;
 
 import com.ke.nhservice.aimianshi.common.auth.TokenUtil;
 import com.ke.nhservice.aimianshi.common.exception.BizException;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -37,6 +38,17 @@ public class UserService implements ApplicationRunner {
             throw new BizException("用户名或密码错误");
         }
         return new LoginResult(tokenUtil.issue(user.id()), user);
+    }
+
+    public void register(String username, String rawPassword, String nickname) {
+        if (username == null || username.isBlank() || rawPassword == null || rawPassword.isBlank()) {
+            throw new BizException("用户名和密码不能为空");
+        }
+        Optional<User> userOptional = userDao.findByUsername(username.trim());
+        if(userOptional.isPresent()){
+            throw new BizException("当前用户名已被注册");
+        }
+        userDao.insert(username, encoder.encode(rawPassword), nickname);
     }
 
     /** 登录成功要同时把 token 和用户信息返回给前端，所以两个一起给 */

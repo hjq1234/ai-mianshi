@@ -40,4 +40,10 @@ public class AuthController {
         User user = userService.requireUser(UserContext.get());
         return ApiResponse.ok(new MeVO(user.id(), user.username(), user.nickname()));
     }
+
+    @PostMapping("/register")
+    public ApiResponse<LoginVO> register(String userName,String password,String nickName) {
+        userService.register(userName, password,nickName);
+        return ApiResponse.ok();
+    }
 }
